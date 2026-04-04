@@ -1,45 +1,34 @@
 ---
 # yaml-language-server: $schema=https://schema.blue-build.org/recipe-v1.json
-# image will be published to ghcr.io/<user>/<name>
+
 name: bluefin-gdx-workstation
-# description will be included in the image's metadata
-description: This is my personal OS image.
+description: Custom Bluefin GDX with 1Password
 
-# the base image to build on top of (FROM) and the version tag to use
-base-image: ghcr.io/ublue-os/silverblue-main
-image-version: 42 # latest is also supported if you want new updates ASAP
+# GDX LTS base image - CentOS Stream 10 with NVIDIA + CUDA
+base-image: ghcr.io/ublue-os/bluefin-gdx
+image-version: lts
 
-# module configuration, executed in order
-# you can include multiple instances of the same module
 modules:
-  - type: files
-    files:
-      - source: system
-        destination: / # copies files/system/* (* means everything inside it) into your image's root folder /
+  # 1Password repo + packages
+  - type: script
+    snippets:
+      - |
+        # Add 1Password RPM repository
+        rpm --import https://downloads.1password.com/linux/keys/1password.asc
+        cat > /etc/yum.repos.d/1password.repo << 'EOF'
+        [1password]
+        name=1Password Stable Channel
+        baseurl=https://downloads.1password.com/linux/rpm/stable/$basearch
+        enabled=1
+        gpgcheck=1
+        repo_gpgcheck=1
+        gpgkey=https://downloads.1password.com/linux/keys/1password.asc
+        EOF
+        
+        # Install 1Password GUI + CLI
+        dnf install -y 1password 1password-cli
+        
+        # Clean up dnf cache to keep image small
+        dnf clean all
 
-  - type: dnf
-    repos:
-      copr:
-        - atim/starship
-    install:
-      packages:
-        - micro
-        - starship
-    remove:
-      packages:
-        # example: removing firefox (in favor of the flatpak)
-        # "firefox" is the main package, "firefox-langpacks" is a dependency
-        - firefox
-        - firefox-langpacks # also remove firefox dependency (not required for all packages, this is a special case)
-
-  - type: default-flatpaks
-    configurations:
-      - notify: true # Send notification after install/uninstall is finished (true/false)
-        scope: system
-        # If no repo information is specified, Flathub will be used by default
-        install: # system flatpaks we want all users to have and not remove
-          - org.mozilla.firefox
-          - org.gnome.Loupe
-      - scope: user # Also add Flathub user repo, but no user packages
-
-  - type: signing # this sets up the proper policy & signing files for signed images to work fully
+  - type: signing
