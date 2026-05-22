@@ -2,7 +2,7 @@
 # yaml-language-server: $schema=https://schema.blue-build.org/recipe-v1.json
 
 name: bluefin-gdx-workstation
-description: |
+description: >-
   Custom Bluefin GDX LTS for an HPO/ML workstation.
   Adds 1Password, Brave, Insync (GUI + Nautilus), and Zed.
   Disables zram, applies HPO sysctl/THP tunings, sets nvidia-drm.modeset=0
