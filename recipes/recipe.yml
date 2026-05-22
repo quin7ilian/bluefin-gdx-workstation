@@ -112,11 +112,13 @@ modules:
         mkdir -p /usr/lib
         tar -xzf "$TMP_TARBALL" -C /usr/lib/
 
-        # System-wide terminal symlink. Points to bin/cli (NOT bin/zed) —
-        # matches official install.sh behaviour. bin/cli is the lightweight
-        # CLI that opens files in an existing Zed window or launches one;
-        # bin/zed is the full GUI launcher used by the .desktop file below.
-        ln -sf /usr/lib/zed.app/bin/cli /usr/bin/zed
+        # System-wide terminal symlink. Zed 0.139+ consolidated the
+        # separate bin/cli into bin/zed (one binary handles both the
+        # terminal CLI shim and the GUI launcher). The official
+        # install.sh has the same `if bin/cli exists else bin/zed`
+        # fallback chain; we hard-code the new path since the LTS image
+        # rebuilds against current stable.
+        ln -sf /usr/lib/zed.app/bin/zed /usr/bin/zed
 
         # System-wide .desktop entry with absolute paths.
         # Newer tarballs ship dev.zed.Zed.desktop; older ones ship zed.desktop.
@@ -131,7 +133,6 @@ modules:
 
         # Sanity check.
         test -x /usr/lib/zed.app/bin/zed
-        test -x /usr/lib/zed.app/bin/cli
         test -L /usr/bin/zed
         test -f /usr/share/applications/dev.zed.Zed.desktop
 
