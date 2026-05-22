@@ -25,7 +25,11 @@ modules:
   # Prevents Mutter from scheduling work on the 4090s and doing
   # expensive cross-GPU framebuffer copies. CUDA is unaffected
   # (CUDA uses /dev/nvidia* char devices, not DRM).
-  - type: rpm-ostree
+  #
+  # GDX is bootc-based, so kargs are written to /usr/lib/bootc/kargs.d/
+  # and applied by `bootc upgrade`. The deprecated `rpm-ostree: kargs:`
+  # property no longer validates against the current schema.
+  - type: kargs
     kargs:
       - nvidia-drm.modeset=0
 
