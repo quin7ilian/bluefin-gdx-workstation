@@ -1,43 +1,67 @@
-# bluefin-gdx-workstation &nbsp; [![bluebuild build badge](https://github.com/quin7ilian/bluefin-gdx-workstation/actions/workflows/build.yml/badge.svg)](https://github.com/quin7ilian/bluefin-gdx-workstation/actions/workflows/build.yml)
+# bluefin-gdx-workstation
 
-See the [BlueBuild docs](https://blue-build.org/how-to/setup/) for quick setup instructions for setting up your own repository based on this template.
+[![bluebuild build badge](https://github.com/quin7ilian/bluefin-gdx-workstation/actions/workflows/build.yml/badge.svg)](https://github.com/quin7ilian/bluefin-gdx-workstation/actions/workflows/build.yml)
 
-After setup, it is recommended you update this README to describe your custom image.
+A custom [Bluefin GDX](https://projectbluefin.io/) LTS image for HPO/ML workstation use.
+
+## What this image adds
+
+On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
+
+**Applications**
+- 1Password (GUI + CLI)
+- Brave browser
+- Insync (GUI + Nautilus extension), background-managed via a systemd user unit
+- Zed editor (official upstream tarball, installed to `/usr/lib/zed.app`)
+
+**Kernel and system tunings**
+- `nvidia-drm.modeset=0` — for multi-GPU configs where an AMD GPU drives all displays and Nvidia GPUs are compute-only (prevents Mutter from doing cross-GPU framebuffer copies)
+- zram disabled (workstation with 512GB RAM does not need it)
+- Custom sysctl: scheduler, dirty-page limits, mmap count, overcommit, perf paranoid
+- Transparent Huge Pages set to `madvise`
+
+**Convenience**
+- `ujust enable-insync` / `ujust disable-insync` / `ujust status-insync`
 
 ## Installation
 
-> [!WARNING]  
-> [This is an experimental feature](https://www.fedoraproject.org/wiki/Changes/OstreeNativeContainerStable), try at your own discretion.
-
 To rebase an existing atomic Fedora installation to the latest build:
 
-- First rebase to the unsigned image, to get the proper signing keys and policies installed:
-  ```
-  rpm-ostree rebase ostree-unverified-registry:ghcr.io/quin7ilian/bluefin-gdx-workstation:latest
-  ```
-- Reboot to complete the rebase:
-  ```
-  systemctl reboot
-  ```
-- Then rebase to the signed image, like so:
-  ```
-  rpm-ostree rebase ostree-image-signed:docker://ghcr.io/quin7ilian/bluefin-gdx-workstation:latest
-  ```
-- Reboot again to complete the installation
-  ```
-  systemctl reboot
-  ```
+```
+# First rebase to the unsigned image (to get signing keys and policies):
+sudo rpm-ostree rebase ostree-unverified-registry:ghcr.io/quin7ilian/bluefin-gdx-workstation:latest
+sudo systemctl reboot
 
-The `latest` tag will automatically point to the latest build. That build will still always use the Fedora version specified in `recipe.yml`, so you won't get accidentally updated to the next major version.
+# Then rebase to the signed image:
+sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/quin7ilian/bluefin-gdx-workstation:latest
+sudo systemctl reboot
+```
 
-## ISO
+## Post-install steps
 
-If build on Fedora Atomic, you can generate an offline ISO with the instructions available [here](https://blue-build.org/how-to/generate-iso/#_top). These ISOs cannot unfortunately be distributed on GitHub for free due to large sizes, so for public projects something else has to be used for hosting.
+```bash
+# Enable the Insync sync engine for your user (persists across reboots)
+ujust enable-insync
+
+# Open the Insync GUI once to link your Google account and pick a sync
+# folder. From the app menu, or:
+insync show
+
+# IMPORTANT: in Insync Preferences, UNCHECK "Start Insync at startup".
+# The systemd user unit handles autostart now — leaving both on causes
+# a duplicate-launch race at login.
+
+# Sign in to 1Password, Brave.
+```
 
 ## Verification
 
-These images are signed with [Sigstore](https://www.sigstore.dev/)'s [cosign](https://github.com/sigstore/cosign). You can verify the signature by downloading the `cosign.pub` file from this repo and running the following command:
+Image signed with [Sigstore cosign](https://github.com/sigstore/cosign):
 
-```bash
+```
 cosign verify --key cosign.pub ghcr.io/quin7ilian/bluefin-gdx-workstation
 ```
+
+## Build
+
+Built and signed automatically via the GitHub Actions workflow in `.github/workflows/build.yml` (BlueBuild template). Rebuilds pick up the latest upstream Zed tarball on each run.

@@ -2,18 +2,42 @@
 # yaml-language-server: $schema=https://schema.blue-build.org/recipe-v1.json
 
 name: bluefin-gdx-workstation
-description: Custom Bluefin GDX with 1Password
+description: |
+  Custom Bluefin GDX LTS for an HPO/ML workstation.
+  Adds 1Password, Brave, Insync (GUI + Nautilus), and Zed.
+  Disables zram, applies HPO sysctl/THP tunings, sets nvidia-drm.modeset=0
+  for AMD-primary + Nvidia-compute-only multi-GPU config.
 
-# GDX LTS base image - CentOS Stream 10 with NVIDIA + CUDA
 base-image: ghcr.io/ublue-os/bluefin-gdx
 image-version: lts
 
 modules:
-  # 1Password repo + packages
+  # ─── System config files ─────────────────────────────────────────────
+  # zram-generator override (empty file), sysctl tunings, THP tmpfiles.d,
+  # systemd user unit for insync, ujust recipes.
+  - type: files
+    files:
+      - source: system
+        destination: /
+
+  # ─── Kernel cmdline: disable DRM modeset on Nvidia GPUs ──────────────
+  # Required for AMD-primary-display + Nvidia-compute-only setup.
+  # Prevents Mutter from scheduling work on the 4090s and doing
+  # expensive cross-GPU framebuffer copies. CUDA is unaffected
+  # (CUDA uses /dev/nvidia* char devices, not DRM).
+  - type: rpm-ostree
+    kargs:
+      - nvidia-drm.modeset=0
+
+  # ─── Third-party RPMs in a single dnf transaction ────────────────────
+  # CS10 ships dnf4, not dnf5 — the BlueBuild `dnf` module will not work
+  # on this base. Using the `script` module with `dnf install` instead.
   - type: script
     snippets:
       - |
-        # Add 1Password RPM repository
+        set -euo pipefail
+
+        # --- 1Password ---
         rpm --import https://downloads.1password.com/linux/keys/1password.asc
         cat > /etc/yum.repos.d/1password.repo << 'EOF'
         [1password]
@@ -24,11 +48,88 @@ modules:
         repo_gpgcheck=1
         gpgkey=https://downloads.1password.com/linux/keys/1password.asc
         EOF
-        
-        # Install 1Password GUI + CLI
-        dnf install -y 1password 1password-cli
-        
-        # Clean up dnf cache to keep image small
-        dnf clean all
 
+        # --- Brave (key file is brave-core.asc, not brave-browser.asc) ---
+        rpm --import https://brave-browser-rpm-release.s3.brave.com/brave-core.asc
+        cat > /etc/yum.repos.d/brave-browser.repo << 'EOF'
+        [brave-browser]
+        name=Brave Browser
+        enabled=1
+        gpgcheck=1
+        gpgkey=https://brave-browser-rpm-release.s3.brave.com/brave-core.asc
+        baseurl=https://brave-browser-rpm-release.s3.brave.com/$basearch
+        EOF
+
+        # --- Insync (native EL10 repo, confirmed available 2026-05) ---
+        # Install GUI + nautilus. The sync engine is started in the
+        # background by a systemd --user unit (see
+        # files/system/usr/lib/systemd/user/insync.service) so the GUI
+        # is only opened when the user wants to configure or browse.
+        rpm --import https://d2t3ff60b2tol4.cloudfront.net/repomd.xml.key
+        cat > /etc/yum.repos.d/insync.repo << 'EOF'
+        [insync]
+        name=insync repo
+        baseurl=https://yum.insync.io/centos/10/
+        gpgcheck=1
+        gpgkey=https://d2t3ff60b2tol4.cloudfront.net/repomd.xml.key
+        enabled=1
+        EOF
+
+        # Single dnf transaction (faster than multiple).
+        dnf install -y \
+          1password 1password-cli \
+          brave-browser \
+          insync insync-nautilus
+
+        dnf clean all
+        rm -rf /var/cache/dnf /var/cache/yum
+
+  # ─── Zed editor (official upstream tarball) ──────────────────────────
+  # Installed to /usr/lib/zed.app (part of the OS image, read-only at
+  # runtime, updated only via image rebuilds). System-wide binary
+  # symlink at /usr/bin/zed and system-wide .desktop entry.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+
+        # zed.dev/api/.../latest/zed-linux-x86_64.tar.gz 307-redirects to
+        # the corresponding github.com/zed-industries/zed release asset.
+        # curl -L follows redirects, so this resolves to the current
+        # stable build on each image rebuild.
+        ZED_URL="https://zed.dev/api/releases/stable/latest/zed-linux-x86_64.tar.gz"
+        TMP_TARBALL="$(mktemp /tmp/zed-XXXXXX.tar.gz)"
+        trap 'rm -f "$TMP_TARBALL"' EXIT
+
+        echo "Downloading latest stable Zed..."
+        curl -fsSL "$ZED_URL" -o "$TMP_TARBALL"
+
+        # The tarball expands to ./zed.app/ — extract directly into /usr/lib.
+        mkdir -p /usr/lib
+        tar -xzf "$TMP_TARBALL" -C /usr/lib/
+
+        # System-wide terminal symlink. Points to bin/cli (NOT bin/zed) —
+        # matches official install.sh behaviour. bin/cli is the lightweight
+        # CLI that opens files in an existing Zed window or launches one;
+        # bin/zed is the full GUI launcher used by the .desktop file below.
+        ln -sf /usr/lib/zed.app/bin/cli /usr/bin/zed
+
+        # System-wide .desktop entry with absolute paths.
+        # Newer tarballs ship dev.zed.Zed.desktop; older ones ship zed.desktop.
+        # The official install.sh has this same fallback.
+        src_desktop="/usr/lib/zed.app/share/applications/dev.zed.Zed.desktop"
+        [ -f "$src_desktop" ] || src_desktop="/usr/lib/zed.app/share/applications/zed.desktop"
+        install -Dm644 "$src_desktop" /usr/share/applications/dev.zed.Zed.desktop
+        sed -i \
+          -e "s|Icon=zed|Icon=/usr/lib/zed.app/share/icons/hicolor/512x512/apps/zed.png|" \
+          -e "s|Exec=zed|Exec=/usr/lib/zed.app/bin/zed|" \
+          /usr/share/applications/dev.zed.Zed.desktop
+
+        # Sanity check.
+        test -x /usr/lib/zed.app/bin/zed
+        test -x /usr/lib/zed.app/bin/cli
+        test -L /usr/bin/zed
+        test -f /usr/share/applications/dev.zed.Zed.desktop
+
+  # ─── Image signing (cosign) ──────────────────────────────────────────
   - type: signing

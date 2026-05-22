@@ -1,0 +1,22 @@
+# This repo builds a Linux OCI image. Every committed file is consumed
+# on Linux (shell scripts, systemd units, sysctl/tmpfiles confs, YAML
+# recipes, .just files). CRLF leaking in from a Windows checkout will
+# silently break bash (`\r` in args), tmpfiles.d parsing, and more.
+#
+# Normalize to LF on commit and force LF on checkout, regardless of the
+# committer's platform or core.autocrlf setting.
+* text=auto eol=lf
+
+# Binary files — never line-end-normalize even if git's auto-detection
+# guesses wrong.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.gz      binary
+*.tar     binary
+*.tgz     binary
+*.zip     binary
+*.key     binary
+*.private binary

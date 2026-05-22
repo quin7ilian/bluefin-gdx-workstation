@@ -1,0 +1,14 @@
+[Unit]
+Description=Insync sync engine
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=forking
+ExecStart=/usr/bin/insync --synchronous-full start
+ExecStop=/usr/bin/insync quit
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
