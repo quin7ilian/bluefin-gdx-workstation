@@ -14,6 +14,12 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 - Insync (GUI + Nautilus extension), background-managed via a systemd user unit
 - Zed editor (official upstream tarball, installed to `/usr/lib/zed.app`)
 
+**Thermal / fan control**
+- `coolercontrold` from the upstream COPR — web UI on `http://localhost:11987`
+- `ipmitool` + `lm_sensors` for BMC and hwmon access
+- `ipmi_si` / `ipmi_devintf` kernel modules autoloaded for `/dev/ipmi0` access on the ASRock WRX80 Creator R2.0
+- (Glue scripts that bridge CoolerControl's file-sensors to `ipmitool raw` fan commands are *not yet shipped* — added in a follow-up once the WRX80 BMC's raw command set has been characterised)
+
 **Kernel and system tunings**
 - `nvidia-drm.modeset=0` — for multi-GPU configs where an AMD GPU drives all displays and Nvidia GPUs are compute-only (prevents Mutter from doing cross-GPU framebuffer copies)
 - zram disabled (workstation with 512GB RAM does not need it)

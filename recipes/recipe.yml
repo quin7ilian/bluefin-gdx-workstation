@@ -88,6 +88,49 @@ modules:
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
 
+  # ─── Thermal / IPMI: ipmitool + CoolerControl daemon ─────────────────
+  # CoolerControl's own ipmitool integration is still a feature request
+  # (gitlab.com/coolercontrol/coolercontrol -/issues/540), so the
+  # workaround on this ASRock WRX80 Creator R2.0 is: ipmitool polls the
+  # BMC and writes values to files; CoolerControl reads those files as
+  # custom file-sensors and writes desired fan duties to other files; a
+  # second glue script translates those back into `ipmitool raw` calls.
+  #
+  # This module ships only the binaries (ipmitool, coolercontrold,
+  # lm_sensors) and the kernel-module autoload entry. The glue scripts
+  # and their systemd units come in a follow-up commit, once the WRX80
+  # BMC's raw command set has been characterised on the live system.
+  #
+  # coolercontrold's web UI is on http://localhost:11987 — the Qt
+  # `coolercontrol` desktop wrapper is intentionally NOT installed.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+
+        # CoolerControl COPR (codifryed/CoolerControl). The COPR builds
+        # for epel-10-x86_64; the .repo file is self-contained and does
+        # not require EPEL itself to be enabled.
+        curl -fsSL \
+          https://copr.fedorainfracloud.org/coprs/codifryed/CoolerControl/repo/epel-10/codifryed-CoolerControl-epel-10.repo \
+          -o /etc/yum.repos.d/codifryed-CoolerControl-epel-10.repo
+
+        # ipmitool + lm_sensors come from centos-appstream (always enabled);
+        # coolercontrold comes from the COPR.
+        #
+        # --setopt=install_weak_deps=False skips the python3-liquidctl
+        # Recommend (would need EPEL; we have no liquid cooling). We add
+        # lm_sensors explicitly because it IS wanted (CoolerControl uses
+        # it for hwmon sensor discovery) and we don't want to rely on
+        # weak-dep resolution to pull it.
+        dnf install -y --setopt=install_weak_deps=False \
+          ipmitool \
+          lm_sensors \
+          coolercontrold
+
+        dnf clean all
+        rm -rf /var/cache/dnf /var/cache/yum
+
   # ─── Zed editor (official upstream tarball) ──────────────────────────
   # Installed to /usr/lib/zed.app (part of the OS image, read-only at
   # runtime, updated only via image rebuilds). System-wide binary
