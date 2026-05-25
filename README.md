@@ -20,6 +20,12 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 - `ipmi_si` / `ipmi_devintf` kernel modules autoloaded for `/dev/ipmi0` access on the ASRock WRX80 Creator R2.0
 - (Glue scripts that bridge CoolerControl's file-sensors to `ipmitool raw` fan commands are *not yet shipped* — added in a follow-up once the WRX80 BMC's raw command set has been characterised)
 
+**Profiling / HPO benchmarking**
+- Host-installed: `perf`, `bpftrace`, `sysstat` (sar/iostat/mpstat/pidstat), `strace`, `ltrace`, `numactl`, `hwloc`
+- Kernel-coupled tools (perf, bpftrace) must match the running kernel — installed in the image rather than in a Distrobox where they'd be built against a different kernel
+- `kernel.perf_event_paranoid = 1` is set in sysctl, so `perf stat` / `perf record` work against own processes without sudo
+- Python-side profilers (`py-spy`, `scalene`, `austin`, `memray`, `pyinstrument`) install in the user's conda env via pip/uv — not in the image
+
 **Kernel and system tunings**
 - `nvidia-drm.modeset=0` — for multi-GPU configs where an AMD GPU drives all displays and Nvidia GPUs are compute-only (prevents Mutter from doing cross-GPU framebuffer copies)
 - zram disabled (workstation with 512GB RAM does not need it)

@@ -131,6 +131,40 @@ modules:
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
 
+  # ─── Profiling tools (kernel-coupled, must match running kernel) ─────
+  # perf and bpftrace are built from the kernel source tree and read
+  # kernel data structures whose ABI changes between versions; running
+  # them inside a Distrobox produces cryptic errors, miscounted events,
+  # or unresolved symbols because the container ships them built for a
+  # different kernel. Same logic for ftrace consumers and anything
+  # reading /sys/kernel/debug.
+  #
+  # Userland Python profilers (py-spy, scalene, austin, memray,
+  # line_profiler, pyinstrument) read process memory rather than kernel
+  # counters and are intentionally NOT installed here — those go in the
+  # user's conda env via pip/uv.
+  #
+  # `kernel.perf_event_paranoid = 1` is set via the sysctl tunings, so
+  # the user can run `perf stat` / `perf record` against own processes
+  # without sudo.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+
+        # All from CS10 AppStream/BaseOS — no third-party repos needed.
+        dnf install -y \
+          perf \
+          bpftrace \
+          sysstat \
+          strace \
+          ltrace \
+          numactl \
+          hwloc
+
+        dnf clean all
+        rm -rf /var/cache/dnf /var/cache/yum
+
   # ─── Zed editor (official upstream tarball) ──────────────────────────
   # Installed to /usr/lib/zed.app (part of the OS image, read-only at
   # runtime, updated only via image rebuilds). System-wide binary
