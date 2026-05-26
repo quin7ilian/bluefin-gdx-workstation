@@ -18,7 +18,7 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 - `coolercontrold` from the upstream COPR — web UI on `http://localhost:11987`
 - `ipmitool` + `lm_sensors` for BMC and hwmon access
 - `ipmi_si` / `ipmi_devintf` kernel modules autoloaded for `/dev/ipmi0` access on the ASRock WRX80 Creator R2.0
-- (Glue scripts that bridge CoolerControl's file-sensors to `ipmitool raw` fan commands are *not yet shipped* — added in a follow-up once the WRX80 BMC's raw command set has been characterised)
+- `cc-plugin-custom-device` plugin installed at `/etc/coolercontrol/plugins/custom-device/` — bridges IPMI to CoolerControl via shell commands declared in `manifest.toml`; per-board WRX80 command set is filled in post-rebase, then folded back into the image
 
 **Profiling / HPO benchmarking**
 - Host-installed: `perf`, `bpftrace`, `sysstat` (sar/iostat/mpstat/pidstat), `strace`, `ltrace`, `numactl`, `hwloc`

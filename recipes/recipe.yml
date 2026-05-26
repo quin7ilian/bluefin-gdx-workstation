@@ -88,18 +88,22 @@ modules:
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
 
-  # ─── Thermal / IPMI: ipmitool + CoolerControl daemon ─────────────────
-  # CoolerControl's own ipmitool integration is still a feature request
-  # (gitlab.com/coolercontrol/coolercontrol -/issues/540), so the
-  # workaround on this ASRock WRX80 Creator R2.0 is: ipmitool polls the
-  # BMC and writes values to files; CoolerControl reads those files as
-  # custom file-sensors and writes desired fan duties to other files; a
-  # second glue script translates those back into `ipmitool raw` calls.
+  # ─── Thermal / IPMI: CoolerControl daemon + custom-device plugin ─────
+  # CoolerControl has no native ipmitool support
+  # (gitlab.com/coolercontrol/coolercontrol issue #540), so the IPMI ↔
+  # CoolerControl bridge on this ASRock WRX80 Creator R2.0 uses the
+  # official `cc-plugin-custom-device` plugin: it runs as a subprocess
+  # of coolercontrold and shells out to whatever commands you declare
+  # in /etc/coolercontrol/plugins/custom-device/manifest.toml for each
+  # fan/temp channel (typically `ipmitool sensor` for reads, `ipmitool
+  # raw …` for writes).
   #
-  # This module ships only the binaries (ipmitool, coolercontrold,
-  # lm_sensors) and the kernel-module autoload entry. The glue scripts
-  # and their systemd units come in a follow-up commit, once the WRX80
-  # BMC's raw command set has been characterised on the live system.
+  # The plugin's default manifest.toml is a placeholder — the WRX80's
+  # per-channel raw command set has to be discovered empirically on the
+  # live system (post-rebase), pasted in, with `privileged = true` set
+  # so commands that need root can run. Once that manifest is stable it
+  # can be baked into a subsequent image commit under
+  # files/system/etc/coolercontrol/plugins/custom-device/.
   #
   # coolercontrold's web UI is on http://localhost:11987 — the Qt
   # `coolercontrol` desktop wrapper is intentionally NOT installed.
@@ -115,8 +119,10 @@ modules:
           https://copr.fedorainfracloud.org/coprs/codifryed/CoolerControl/repo/epel-10/codifryed-CoolerControl-epel-10.repo \
           -o /etc/yum.repos.d/codifryed-CoolerControl-epel-10.repo
 
-        # ipmitool + lm_sensors come from centos-appstream (always enabled);
-        # coolercontrold comes from the COPR.
+        # ipmitool + lm_sensors + sudo from centos-appstream;
+        # coolercontrold from the COPR. sudo is needed for the plugin
+        # install.sh below (it uses sudo internally) and is generally
+        # useful on the host.
         #
         # --setopt=install_weak_deps=False skips the python3-liquidctl
         # Recommend (would need EPEL; we have no liquid cooling). We add
@@ -126,7 +132,19 @@ modules:
         dnf install -y --setopt=install_weak_deps=False \
           ipmitool \
           lm_sensors \
+          sudo \
           coolercontrold
+
+        # cc-plugin-custom-device: installs the plugin binary, default
+        # manifest.toml, and UI snippet to /etc/coolercontrol/plugins/
+        # custom-device/. Download to a temp file first so a curl
+        # failure surfaces as an error rather than silently producing
+        # empty stdin into sh.
+        curl -fsSL \
+          https://gitlab.com/coolercontrol/cc-plugin-custom-device/-/raw/main/install.sh \
+          -o /tmp/cc-plugin-install.sh
+        sh /tmp/cc-plugin-install.sh
+        rm /tmp/cc-plugin-install.sh
 
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
