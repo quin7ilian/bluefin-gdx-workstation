@@ -52,6 +52,34 @@ modules:
         echo "Patched $karg_file:"
         cat "$karg_file"
 
+  # ─── amdgpu kargs: fix high-refresh blanking on 5120x1440 ultrawide ──
+  # Symptom: at >60 Hz, screen blanks intermittently on mouse movement
+  # / window drag with the Radeon Pro W7500 driving the Samsung Odyssey
+  # G95SD. Empirically confirmed: pinning the GPU to power_dpm_force_
+  # performance_level=high eliminated the blanking entirely → root
+  # cause is MCLK (VRAM clock) reclocking during the display's V-Blank
+  # interval. On ultrawides with CVT-RB short blanking periods at high
+  # refresh, amdgpu can't fit the MCLK transition into the blanking
+  # window, and the failed transition manifests as a blanked frame.
+  #
+  # `dcdebugmask=0x10`     disables PSR (Panel Self Refresh).
+  # `ppfeaturemask=0xfff5bfff` keeps the image's existing overrides
+  #   (PP_OVERDRIVE_MASK + PP_GFX_DCS_MASK cleared, per the kernel
+  #   default of 0xfff7bfff) AND additionally clears bit 17
+  #   (PP_STUTTER_MODE, 0x20000) — the specific mode that triggers
+  #   the V-Blank-window-too-short MCLK switching failure on Navi 33.
+  #
+  # These are *additive* new kargs (not overriding the base), so the
+  # standard BlueBuild kargs module works fine — unlike the
+  # nvidia-drm.modeset case above, there's no base-image kargs.d file
+  # that defines these. References:
+  #   https://wiki.archlinux.org/title/AMDGPU
+  #   https://bbs.archlinux.org/viewtopic.php?id=311159
+  - type: kargs
+    kargs:
+      - amdgpu.dcdebugmask=0x10
+      - amdgpu.ppfeaturemask=0xfff5bfff
+
   # ─── Third-party RPMs in a single dnf transaction ────────────────────
   # CS10 ships dnf4, not dnf5 — the BlueBuild `dnf` module will not work
   # on this base. Using the `script` module with `dnf install` instead.
@@ -111,22 +139,23 @@ modules:
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
 
-  # ─── Thermal / IPMI: CoolerControl daemon + custom-device plugin ─────
+  # ─── Thermal / IPMI: CoolerControl daemon ────────────────────────────
   # CoolerControl has no native ipmitool support
   # (gitlab.com/coolercontrol/coolercontrol issue #540), so the IPMI ↔
   # CoolerControl bridge on this ASRock WRX80 Creator R2.0 uses the
-  # official `cc-plugin-custom-device` plugin: it runs as a subprocess
-  # of coolercontrold and shells out to whatever commands you declare
-  # in /etc/coolercontrol/plugins/custom-device/manifest.toml for each
-  # fan/temp channel (typically `ipmitool sensor` for reads, `ipmitool
-  # raw …` for writes).
+  # official `cc-plugin-custom-device` plugin (declared per-channel via
+  # ipmitool commands in manifest.toml with `privileged = true`).
   #
-  # The plugin's default manifest.toml is a placeholder — the WRX80's
-  # per-channel raw command set has to be discovered empirically on the
-  # live system (post-rebase), pasted in, with `privileged = true` set
-  # so commands that need root can run. Once that manifest is stable it
-  # can be baked into a subsequent image commit under
-  # files/system/etc/coolercontrol/plugins/custom-device/.
+  # The plugin is NOT installed at build time — it ships via the
+  # `ujust install-cc-plugin` recipe in 60-custom.just instead. Why:
+  # coolercontrold 4.x migrates /etc/coolercontrol/plugins → symlink to
+  # /var/lib/coolercontrol/plugins on first start. A build-time install
+  # bakes the path as a directory, then the daemon converts it to a
+  # symlink, and every subsequent ostree /etc merge fails with
+  # "Modified config file newly defaults to directory 'coolercontrol/
+  # plugins', cannot merge" (an unrecoverable shape conflict).
+  # Installing post-rebase via ujust keeps the image's /etc free of
+  # this path so ostree never has to reconcile it.
   #
   # coolercontrold's web UI is on http://localhost:11987 — the Qt
   # `coolercontrol` desktop wrapper is intentionally NOT installed.
@@ -143,31 +172,19 @@ modules:
           -o /etc/yum.repos.d/codifryed-CoolerControl-epel-10.repo
 
         # ipmitool + lm_sensors + sudo from centos-appstream;
-        # coolercontrold from the COPR. sudo is needed for the plugin
-        # install.sh below (it uses sudo internally) and is generally
-        # useful on the host.
+        # coolercontrold from the COPR.
         #
         # --setopt=install_weak_deps=False skips the python3-liquidctl
         # Recommend (would need EPEL; we have no liquid cooling). We add
         # lm_sensors explicitly because it IS wanted (CoolerControl uses
         # it for hwmon sensor discovery) and we don't want to rely on
-        # weak-dep resolution to pull it.
+        # weak-dep resolution to pull it. sudo is needed by the ujust
+        # `install-cc-plugin` recipe (the upstream install.sh uses it).
         dnf install -y --setopt=install_weak_deps=False \
           ipmitool \
           lm_sensors \
           sudo \
           coolercontrold
-
-        # cc-plugin-custom-device: installs the plugin binary, default
-        # manifest.toml, and UI snippet to /etc/coolercontrol/plugins/
-        # custom-device/. Download to a temp file first so a curl
-        # failure surfaces as an error rather than silently producing
-        # empty stdin into sh.
-        curl -fsSL \
-          https://gitlab.com/coolercontrol/cc-plugin-custom-device/-/raw/main/install.sh \
-          -o /tmp/cc-plugin-install.sh
-        sh /tmp/cc-plugin-install.sh
-        rm /tmp/cc-plugin-install.sh
 
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
