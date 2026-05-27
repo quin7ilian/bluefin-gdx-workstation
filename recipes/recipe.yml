@@ -52,48 +52,6 @@ modules:
         echo "Patched $karg_file:"
         cat "$karg_file"
 
-  # ─── amdgpu kargs: fix high-refresh blanking on 5120x1440 ultrawide ──
-  # Symptom: at >60 Hz, screen blanks intermittently on mouse movement
-  # / window drag with the Radeon Pro W7500 driving the Samsung Odyssey
-  # G95SD. Root cause traced to MCLK (VRAM clock) reclocking during the
-  # display's V-Blank interval — on ultrawides with CVT-RB short
-  # blanking periods at high refresh, amdgpu can't fit the MCLK
-  # transition into the blanking window, and the failed transition
-  # manifests as a blanked frame. Confirmed empirically: pinning ONLY
-  # MCLK (`echo manual > power_dpm_force_performance_level; echo 3 >
-  # pp_dpm_mclk`) eliminates blanking — so MCLK alone is the culprit;
-  # SCLK transitions don't need to be touched.
-  #
-  # `dcdebugmask=0x10`         disables PSR (Panel Self Refresh).
-  #   Kept as defensive belt-and-braces — PSR doesn't appear active
-  #   on this G95SD path, but the bit is a documented community
-  #   workaround for amdgpu blanking and costs nothing.
-  # `ppfeaturemask=0xfff5bffd` clears bit 1 (PP_MCLK_DPM_MASK, 0x2)
-  #   in addition to bits 14/17/19 (PP_OVERDRIVE_MASK,
-  #   PP_STUTTER_MODE, PP_GFX_DCS_MASK). Clearing bit 1 disables MCLK
-  #   DPM entirely → MCLK pins at its boot default state (highest on
-  #   Navi 33), which is what `power_dpm_force_performance_level=
-  #   manual; pp_dpm_mclk=3` does at runtime and what eliminates the
-  #   blanking. Idle-power cost is small because SCLK still varies.
-  #
-  # An earlier version of this karg set used `ppfeaturemask=0xfff5bfff`
-  # (PP_STUTTER_MODE cleared but not PP_MCLK_DPM_MASK) — it didn't
-  # work because the SMU firmware on Navi 33 exposes MCLK DPM as
-  # separate features (`DPM_UCLK` bit 3 + `DS_UCLK` bit 16 in
-  # /sys/class/drm/cardN/device/pp_features) that the kernel's
-  # PP_STUTTER_MODE bit doesn't control on this generation.
-  #
-  # These are *additive* new kargs (not overriding the base), so the
-  # standard BlueBuild kargs module works fine — unlike the
-  # nvidia-drm.modeset case above, there's no base-image kargs.d file
-  # that defines these. References:
-  #   https://wiki.archlinux.org/title/AMDGPU
-  #   https://bbs.archlinux.org/viewtopic.php?id=311159
-  - type: kargs
-    kargs:
-      - amdgpu.dcdebugmask=0x10
-      - amdgpu.ppfeaturemask=0xfff5bffd
-
   # ─── Third-party RPMs in a single dnf transaction ────────────────────
   # CS10 ships dnf4, not dnf5 — the BlueBuild `dnf` module will not work
   # on this base. Using the `script` module with `dnf install` instead.
@@ -203,15 +161,20 @@ modules:
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
 
-  # ─── Enable coolercontrold at boot ───────────────────────────────────
-  # The COPR package ships the unit but doesn't preset-enable it, so
-  # without this the web UI on :11987 is not reachable after a fresh
-  # rebase. Must come AFTER the CoolerControl install module so the
-  # unit file exists when `systemctl enable` runs at build time.
+  # ─── Enable build-time services ──────────────────────────────────────
+  # - coolercontrold.service: COPR ships the unit but doesn't preset-
+  #   enable it, so without this the web UI on :11987 is not reachable
+  #   after a fresh rebase. Must come AFTER the CoolerControl install
+  #   module so the unit file exists when `systemctl enable` runs.
+  # - amdgpu-pin-mclk.service: workstation-specific oneshot that pins
+  #   MCLK to its highest DPM state on the AMD GPU at boot — fixes the
+  #   Navi 33 / 5120x1440 ultrawide high-refresh blanking. The unit
+  #   file is shipped via files/system/etc/systemd/system/.
   - type: systemd
     system:
       enabled:
         - coolercontrold.service
+        - amdgpu-pin-mclk.service
 
   # ─── Profiling tools (kernel-coupled, must match running kernel) ─────
   # perf and bpftrace are built from the kernel source tree and read

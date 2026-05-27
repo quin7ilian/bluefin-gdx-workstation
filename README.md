@@ -21,7 +21,7 @@ Several pieces of this image are tuned to one specific build — kargs, sysctl v
 | BMC | ASPEED, exposes virtual USB ethernet (USB ID `046b:ffb0`) |
 | Storage | NVMe (Kingston KC3000 4 TB + 1 TB) |
 
-The choices to keep in mind if you adapt this image for different hardware: `nvidia-drm.modeset=0` assumes AMD-primary + Nvidia-compute-only display layout; `amdgpu.dcdebugmask=0x10` + `amdgpu.ppfeaturemask=0xfff5bffd` are specific to the Navi 33 + high-refresh-ultrawide blanking issue; `vm.dirty_bytes` and `vm.max_map_count` are tuned for 512 GB; the BMC USB ethernet suppression matches by interface name `usb0`.
+The choices to keep in mind if you adapt this image for different hardware: `nvidia-drm.modeset=0` assumes AMD-primary + Nvidia-compute-only display layout; `amdgpu-pin-mclk.service` is specific to the Navi 33 + high-refresh-ultrawide blanking issue; `vm.dirty_bytes` and `vm.max_map_count` are tuned for 512 GB; the BMC USB ethernet suppression matches by interface name `usb0`.
 
 ## What this image adds
 
@@ -48,7 +48,7 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 
 **Kernel and system tunings**
 - `nvidia-drm.modeset=0` — for multi-GPU configs where an AMD GPU drives all displays and Nvidia GPUs are compute-only (prevents Mutter from doing cross-GPU framebuffer copies)
-- `amdgpu.dcdebugmask=0x10` + `amdgpu.ppfeaturemask=0xfff5bffd` — disables PSR and (critically) MCLK DPM on amdgpu. Fixes intermittent screen blanking on Navi 33 (Radeon Pro W7500) driving the Samsung Odyssey G95SD at >60 Hz. Root cause is MCLK reclocking failing to fit inside the short V-Blank window of CVT-RB timing at high refresh — confirmed empirically that pinning MCLK alone eliminates the blanking. SCLK remains free to vary so idle power impact is small
+- `amdgpu-pin-mclk.service` — systemd oneshot that pins MCLK to its highest DPM state at boot on the AMD GPU. Fixes intermittent screen blanking on Navi 33 (Radeon Pro W7500) driving the Samsung Odyssey G95SD at >60 Hz; root cause is MCLK reclocking failing to fit inside the short V-Blank window of CVT-RB timing at high refresh. SCLK remains on auto so idle power impact is limited to MCLK staying at its highest state (~10 W). Implemented as a sysfs write rather than an `amdgpu.ppfeaturemask` karg because the kernel's `PP_*_MASK` enum doesn't reliably translate to the SMU firmware's runtime feature flags on RDNA3
 - zram disabled (workstation with 512GB RAM does not need it)
 - Custom sysctl: scheduler, dirty-page limits, mmap count, overcommit, perf paranoid
 - Transparent Huge Pages set to `madvise`
