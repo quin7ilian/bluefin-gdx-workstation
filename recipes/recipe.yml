@@ -26,12 +26,31 @@ modules:
   # expensive cross-GPU framebuffer copies. CUDA is unaffected
   # (CUDA uses /dev/nvidia* char devices, not DRM).
   #
-  # GDX is bootc-based, so kargs are written to /usr/lib/bootc/kargs.d/
-  # and applied by `bootc upgrade`. The deprecated `rpm-ostree: kargs:`
-  # property no longer validates against the current schema.
-  - type: kargs
-    kargs:
-      - nvidia-drm.modeset=0
+  # Why this is a `script` module, not a `kargs` module:
+  # the Bluefin GDX base image ships /usr/lib/bootc/kargs.d/00-nvidia.toml
+  # with `nvidia-drm.modeset=1` (uBlue's standard Nvidia-display config,
+  # required for Wayland-on-Nvidia setups). A separate kargs.d file
+  # setting `=0` does NOT override it — bootc upstream documents
+  # cross-file karg removal/override as "currently undefined behavior"
+  # and empirically the base's `=1` wins on /proc/cmdline. The reliable
+  # fix is to edit the base's file in place; the BlueBuild `files`
+  # module's cp -rf would also work, but `sed -i` survives upstream
+  # adding new kargs to that file.
+  #
+  # Fail loudly if the base ever changes the karg name or value — better
+  # to break the build than silently boot with the wrong cmdline.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+        karg_file=/usr/lib/bootc/kargs.d/00-nvidia.toml
+        test -f "$karg_file" || { echo "ERROR: $karg_file missing — Bluefin GDX base layout changed, recipe needs update"; exit 1; }
+        grep -q 'nvidia-drm.modeset=1' "$karg_file" || { echo "ERROR: $karg_file no longer contains 'nvidia-drm.modeset=1' — base changed, recipe needs update"; cat "$karg_file"; exit 1; }
+        sed -i 's/nvidia-drm.modeset=1/nvidia-drm.modeset=0/g' "$karg_file"
+        grep -q 'nvidia-drm.modeset=0' "$karg_file"
+        ! grep -q 'nvidia-drm.modeset=1' "$karg_file"
+        echo "Patched $karg_file:"
+        cat "$karg_file"
 
   # ─── Third-party RPMs in a single dnf transaction ────────────────────
   # CS10 ships dnf4, not dnf5 — the BlueBuild `dnf` module will not work
@@ -80,10 +99,14 @@ modules:
         EOF
 
         # Single dnf transaction (faster than multiple).
+        # gnome-browser-connector (CS10 AppStream) provides the native
+        # messaging host so extensions.gnome.org "Install" buttons work
+        # in Firefox/Chrome/Brave without manual rpm-ostree layering.
         dnf install -y \
           1password 1password-cli \
           brave-browser \
-          insync insync-nautilus
+          insync insync-nautilus \
+          gnome-browser-connector
 
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
@@ -148,6 +171,16 @@ modules:
 
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
+
+  # ─── Enable coolercontrold at boot ───────────────────────────────────
+  # The COPR package ships the unit but doesn't preset-enable it, so
+  # without this the web UI on :11987 is not reachable after a fresh
+  # rebase. Must come AFTER the CoolerControl install module so the
+  # unit file exists when `systemctl enable` runs at build time.
+  - type: systemd
+    system:
+      enabled:
+        - coolercontrold.service
 
   # ─── Profiling tools (kernel-coupled, must match running kernel) ─────
   # perf and bpftrace are built from the kernel source tree and read

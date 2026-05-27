@@ -13,9 +13,10 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 - Brave browser
 - Insync (GUI + Nautilus extension), background-managed via a systemd user unit
 - Zed editor (official upstream tarball, installed to `/usr/lib/zed.app`)
+- `gnome-browser-connector` — native messaging host so extensions.gnome.org "Install" buttons work from the browser
 
 **Thermal / fan control**
-- `coolercontrold` from the upstream COPR — web UI on `http://localhost:11987`
+- `coolercontrold` from the upstream COPR — enabled at build time, web UI on `http://localhost:11987`
 - `ipmitool` + `lm_sensors` for BMC and hwmon access
 - `ipmi_si` / `ipmi_devintf` kernel modules autoloaded for `/dev/ipmi0` access on the ASRock WRX80 Creator R2.0
 - `cc-plugin-custom-device` plugin installed at `/etc/coolercontrol/plugins/custom-device/` — bridges IPMI to CoolerControl via shell commands declared in `manifest.toml`; per-board WRX80 command set is filled in post-rebase, then folded back into the image
