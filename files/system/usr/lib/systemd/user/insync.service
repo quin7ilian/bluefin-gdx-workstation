@@ -4,8 +4,13 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-Type=forking
-ExecStart=/usr/bin/insync --synchronous-full start
+# `insync start --no-daemon` keeps the process in the foreground so
+# systemd tracks it directly (Type=simple), and stdout/stderr land
+# in the journal. The older `--synchronous-full` top-level flag was
+# removed sometime before 3.9.10 and now produces "Error: No such
+# option: --synchronous-full" with status=2/INVALIDARGUMENT at boot.
+Type=simple
+ExecStart=/usr/bin/insync start --no-daemon
 ExecStop=/usr/bin/insync quit
 Restart=on-failure
 RestartSec=10
