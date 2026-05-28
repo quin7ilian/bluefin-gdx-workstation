@@ -41,9 +41,11 @@ done
 # starts at exactly the speed the BMC was at.
 ipmitool raw 0x3a 0xd6 "${write_args[@]}" >/dev/null
 
-# Flip FAN1-5 to manual (0x01). FAN6-16 stay on default (0x00) — the
-# BMC's auto-curve continues to manage SB_FAN1 / MOS_FAN1 cooling for
-# the chipset and VRM.
+# Flip FAN1-7 to manual (0x01). FAN8-16 stay on default (0x00).
+# Iteration 2 added SB_FAN1 (FAN6) and MOS_FAN1 (FAN7) — chipset and
+# VRM cooling — to CoolerControl. ExecStop reverts all fans to default
+# mode if coolercontrold stops/crashes, so the BMC's own thermal-
+# protection curve remains the failsafe for these critical fans.
 ipmitool raw 0x3a 0xd8 \
-    0x01 0x01 0x01 0x01 0x01 \
-    0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 >/dev/null
+    0x01 0x01 0x01 0x01 0x01 0x01 0x01 \
+    0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 >/dev/null

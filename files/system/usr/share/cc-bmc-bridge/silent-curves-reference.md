@@ -63,6 +63,42 @@ DIMM temps hit 60°C+ before CPU does on memory-bound workloads.
 
 Same as top front. Both front fans together should track DIMM thermals.
 
+## Chipset fan (FAN6 — SB_FAN1, tiny high-RPM fan)
+
+| Driver temp | TEMP_MB |
+|---|---|
+| Curve type | Graph |
+| Points (°C → duty%) | 40 → 20, 55 → 40, 65 → 70, 75 → 100 |
+
+Notes: BMC default was 30% / 2300 RPM — audibly the loudest fan in the
+system. 20% floor (~1500 RPM) should be noticeably quieter while keeping
+the chipset happy. Chipset can run hot (TJmax ~100°C) but degrades over
+time at sustained elevated temps; the 65→70% / 75→100% steep ramp gives
+margin. Driven by TEMP_MB because there's no chipset-specific temp
+exposed by the BMC; TEMP_MB tracks the general motherboard ambient
+which correlates with chipset thermals.
+
+## VRM fan (FAN7 — MOS_FAN1, tiny high-RPM fan) ⚠️
+
+| Driver temp | TEMP_VRM |
+|---|---|
+| Curve type | Graph |
+| Points (°C → duty%) | 40 → 30, 55 → 50, 70 → 80, 85 → 100 |
+
+**⚠️ This fan cools the CPU VRM. The 5995WX can draw 280W+ sustained;
+VRM failure under load is silent and expensive. Do not lower the 30%
+floor without understanding the thermal margin under your actual
+workloads.**
+
+Notes: BMC default was 60% / 5400 RPM — also very loud. 30% floor
+trades some idle noise for adequate VRM cooling at idle/light load.
+The aggressive ramp past 70°C is intentional — Threadripper Pro
+sustained AVX-512 can push VRM into the 80-90°C zone quickly, and
+this fan needs to ramp before that happens. Validate by running
+`stress-ng --cpu 64 --timeout 5m` and watching TEMP_VRM — it should
+stabilise below 75°C with this curve. If it climbs higher, raise the
+70→80% point or lower the floor's response threshold.
+
 ## Combined temp helpers (CoolerControl "Mix" function)
 
 CoolerControl supports composite temperature sources. For the

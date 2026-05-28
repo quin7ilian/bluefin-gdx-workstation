@@ -60,6 +60,7 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 - `ujust enable-insync` / `ujust disable-insync` / `ujust status-insync`
 - `ujust install-cc-plugin` — installs the CoolerControl custom-device plugin post-rebase (also silences the liquidctl warning)
 - `ujust upgrade-cc-plugin` — pulls the latest plugin binary from upstream and re-applies, preserving your customized `manifest.toml`
+- `ujust refresh-bmc-channels` — replaces `/etc/coolercontrol/plugins/custom-device/config.json` with the current image's template. Use after a rebase when a new image adds channels (e.g. iteration 2 added FAN6/FAN7). Backs up the existing config first
 - `ujust disable-liqctld` — flips `liquidctl_integration = false` in `/etc/coolercontrol/config.toml`. Run standalone if `install-cc-plugin` was done before this feature landed
 
 **BMC fan control bridge**

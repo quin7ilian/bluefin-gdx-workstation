@@ -28,17 +28,18 @@
 #   3 = CHA_FAN1/WP   (bottom 3-fan hub)
 #   4 = CHA_FAN2/WP   (top front)
 #   5 = CHA_FAN3/WP   (bottom front)
-#   6,7 (SB_FAN1, MOS_FAN1) intentionally not exposed in iteration 1.
+#   6 = SB_FAN1       (chipset — small high-RPM fan; floor in curve >= 20%)
+#   7 = MOS_FAN1      (VRM — small high-RPM fan; floor in curve >= 30%, ramp aggressively past 70°C)
 
 set -euo pipefail
 
-usage() { echo "usage: $0 <fan_idx 1-5> <duty_percent 0-100>" >&2; exit 64; }
+usage() { echo "usage: $0 <fan_idx 1-7> <duty_percent 0-100>" >&2; exit 64; }
 [[ $# -eq 2 ]] || usage
 
 fan_idx="$1"
 duty_pct="$2"
 
-[[ "$fan_idx" =~ ^[1-5]$ ]] || { echo "fan_idx must be 1-5, got: $fan_idx" >&2; exit 64; }
+[[ "$fan_idx" =~ ^[1-7]$ ]] || { echo "fan_idx must be 1-7, got: $fan_idx" >&2; exit 64; }
 [[ "$duty_pct" =~ ^[0-9]+$ ]] || { echo "duty_pct must be a non-negative integer, got: $duty_pct" >&2; exit 64; }
 (( duty_pct <= 100 )) || { echo "duty_pct must be 0-100, got: $duty_pct" >&2; exit 64; }
 

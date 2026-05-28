@@ -39,72 +39,91 @@ status-insync:
 install-cc-plugin:
     #!/usr/bin/env bash
     set -euo pipefail
+    changed=0
+
+    # ─── Step 1: plugin binary/manifest/UI ──────────────────────────────
     if [ -L /etc/coolercontrol/plugins ] && [ -d /var/lib/coolercontrol/plugins/custom-device ]; then
-        echo "cc-plugin-custom-device is already installed and wired up correctly."
+        echo "Plugin binary already installed and wired up."
         echo "  /etc/coolercontrol/plugins -> $(readlink /etc/coolercontrol/plugins)"
         echo "  /var/lib/coolercontrol/plugins/custom-device/ exists."
-        echo
-        echo "Nothing to do. If you want to refresh the plugin binary/UI from"
-        echo "upstream while keeping your customized manifest.toml, run:"
-        echo "  ujust upgrade-cc-plugin"
-        echo "To force a clean reinstall (loses your manifest.toml customizations),"
-        echo "remove /var/lib/coolercontrol/plugins/custom-device and re-run this command."
-        exit 0
-    fi
-    if [ -d /var/lib/coolercontrol/plugins/custom-device ] && [ ! -e /etc/coolercontrol/plugins ]; then
-        echo "Plugin content already in /var (from a previous install), but the"
-        echo "/etc/coolercontrol/plugins symlink is missing — re-creating it."
+        echo "  (To refresh binary/UI: ujust upgrade-cc-plugin)"
+    elif [ -d /var/lib/coolercontrol/plugins/custom-device ] && [ ! -e /etc/coolercontrol/plugins ]; then
+        echo "Plugin content in /var but /etc symlink missing — re-creating."
         sudo systemctl stop coolercontrold
         sudo ln -s /var/lib/coolercontrol/plugins /etc/coolercontrol/plugins
         sudo systemctl start coolercontrold
-        echo "Done — daemon restarted, symlink restored."
-        exit 0
+        changed=1
+    else
+        echo "Downloading cc-plugin-custom-device install.sh from upstream..."
+        tmp="$(mktemp /tmp/cc-plugin-install-XXXXXX.sh)"
+        trap 'rm -f "$tmp"' EXIT
+        curl -fsSL https://gitlab.com/coolercontrol/cc-plugin-custom-device/-/raw/main/install.sh -o "$tmp"
+        echo "Running install.sh (installs to /etc/coolercontrol/plugins/custom-device/)..."
+        sudo sh "$tmp"
+        changed=1
     fi
-    echo "Downloading cc-plugin-custom-device install.sh from upstream..."
-    tmp="$(mktemp /tmp/cc-plugin-install-XXXXXX.sh)"
-    trap 'rm -f "$tmp"' EXIT
-    curl -fsSL https://gitlab.com/coolercontrol/cc-plugin-custom-device/-/raw/main/install.sh -o "$tmp"
-    echo "Running install.sh (sudo required — installs to /etc/coolercontrol/plugins/custom-device/)..."
-    sudo sh "$tmp"
-    echo
-    # Copy our pre-populated WRX80 config.json into the plugin dir so all
-    # channels (5 fans + 12 temps) are defined out of the box. Skip-if-exists
-    # so any manual edits aren't clobbered on re-runs.
+
+    # ─── Step 2: WRX80 channel config.json ──────────────────────────────
     plugin_config=/etc/coolercontrol/plugins/custom-device/config.json
     template=/usr/share/cc-bmc-bridge/config.json
     if [ -f "$plugin_config" ]; then
-        echo "  $plugin_config already exists — leaving as-is (skip)."
-        echo "  Template available at: $template"
+        echo "Channel config already at $plugin_config — leaving as-is (skip)."
+        echo "  Template: $template"
     else
-        echo "Copying pre-populated config from $template..."
+        echo "Deploying pre-populated config from $template..."
         sudo install -m644 "$template" "$plugin_config"
-        echo "  All 5 fan channels + 12 temp sensors defined; ready to use."
+        echo "  5 fan channels + 12 temp sensors defined; ready to use."
+        changed=1
     fi
+
+    # ─── Step 2b: flip plugin to privileged mode ────────────────────────
+    # Upstream manifest.toml ships `privileged = false` → plugin runs as
+    # unprivileged cc-plugin-user, which can't read /dev/ipmi0. Every
+    # ipmitool call fails silently → temps don't populate, fan writes
+    # don't work. Flip to privileged = true. Idempotent.
+    plugin_manifest=/etc/coolercontrol/plugins/custom-device/manifest.toml
+    if [ -f "$plugin_manifest" ]; then
+        if grep -qE '^privileged = false' "$plugin_manifest"; then
+            echo "Flipping plugin to privileged mode (needed for /dev/ipmi0 access)..."
+            sudo sed -i 's/^privileged = false$/privileged = true/' "$plugin_manifest"
+            changed=1
+        elif grep -qE '^privileged = true' "$plugin_manifest"; then
+            echo "Plugin manifest already set to privileged = true."
+        else
+            echo "WARNING: $plugin_manifest has no 'privileged' line in the expected format."
+            echo "  Check it manually — upstream may have changed the manifest schema."
+        fi
+    fi
+
+    # ─── Step 3: restart daemon if anything changed ─────────────────────
+    if [ "$changed" -eq 1 ]; then
+        echo "Restarting coolercontrold to apply changes..."
+        sudo systemctl restart coolercontrold
+    fi
+
+    # ─── Step 4: silence liquidctl warning (idempotent) ─────────────────
     echo
-    echo "Restarting coolercontrold to load the plugin and migrate to /var/lib/coolercontrol/plugins..."
-    sudo systemctl restart coolercontrold
-    echo
-    echo "Also silencing the liquidctl 'package not detected' warning"
-    echo "(this workstation has no liquid cooling)..."
+    echo "Ensuring liquidctl integration is disabled..."
     just --justfile {{justfile()}} disable-liqctld
+
     echo
     echo "Done. Next steps:"
-    echo "  - Open http://localhost:11987 to see the CoolerControl UI."
-    echo "    The WRX80 BMC device with all 5 fans and 12 temp sensors"
-    echo "    should appear automatically."
-    echo "  - Configure fan curves in the UI under each fan channel."
-    echo "    Suggested starting points:"
+    echo "  - Open http://localhost:11987 — the WRX80 BMC device with"
+    echo "    5 fans and 12 temp sensors should appear automatically."
+    echo "  - Configure fan curves in the UI per:"
     echo "      /usr/share/cc-bmc-bridge/silent-curves-reference.md"
-    echo "  - To edit channel definitions later (add FAN6/7, rename, etc.):"
+    echo "  - To edit channels later:"
     echo "      sudo \$EDITOR /etc/coolercontrol/plugins/custom-device/config.json"
     echo "      sudo systemctl restart coolercontrold"
 
 # Refresh cc-plugin-custom-device to the latest upstream version while
-# preserving the customized manifest.toml (the per-channel ipmitool
-# commands for the WRX80 BMC). The upstream install.sh overwrites
-# every file under custom-device/, so we back up manifest.toml first
-# and restore it afterwards. Use this when a new plugin release fixes
-# a bug or adds features.
+# preserving local manifest.toml customizations (specifically:
+# `privileged = true` which we flip from upstream's default of false;
+# without it the plugin can't read /dev/ipmi0). The upstream install.sh
+# overwrites every file under custom-device/, so we back up manifest.toml
+# first and restore it afterwards. config.json is in /var and untouched
+# by install.sh, so it doesn't need backup/restore.
+# Use this when a new plugin release fixes a bug or adds features.
 upgrade-cc-plugin:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -134,6 +153,46 @@ upgrade-cc-plugin:
     echo "Done. Plugin binary/UI upgraded; your manifest.toml customizations are preserved."
     echo "Check the new binary is loaded:"
     echo "  journalctl -u coolercontrold -b -n 20 | grep -i custom-device"
+
+# Force-refresh the cc-plugin-custom-device config.json from the image's
+# current /usr/share/cc-bmc-bridge/config.json template, backing up the
+# existing one. Use this when a new image build ships an updated channel
+# definition (e.g. iteration 2 added FAN6/FAN7) and you want to adopt it
+# without losing the old definition entirely.
+#
+# This LOSES any UI customizations you've made to the existing config —
+# use upgrade-cc-plugin's pattern of diff'ing the backup if you've made
+# manual edits worth preserving.
+refresh-bmc-channels:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    template=/usr/share/cc-bmc-bridge/config.json
+    target=/etc/coolercontrol/plugins/custom-device/config.json
+    if [ ! -f "$template" ]; then
+        echo "Template missing at $template — not in this image build."
+        exit 1
+    fi
+    if [ ! -e "$target" ]; then
+        echo "$target doesn't exist — run \`ujust install-cc-plugin\` first."
+        exit 1
+    fi
+    if cmp -s "$template" "$target"; then
+        echo "$target already matches the template — nothing to refresh."
+        exit 0
+    fi
+    backup="${target}.bak-pre-refresh-$(date +%Y%m%d-%H%M%S)"
+    echo "Backing up existing config → $backup"
+    sudo cp -a "$target" "$backup"
+    echo "Deploying new template from $template..."
+    sudo install -m644 "$template" "$target"
+    echo "Restarting coolercontrold to load the new channel definitions..."
+    sudo systemctl restart coolercontrold
+    echo
+    echo "Done. New channels (if any) appear in the CoolerControl UI."
+    echo "Diff your old config: diff $backup $target"
+    echo "If you had manual edits, merge them back and:"
+    echo "  sudo \$EDITOR $target"
+    echo "  sudo systemctl restart coolercontrold"
 
 # Disable CoolerControl's liquidctl integration in /etc/coolercontrol/config.toml.
 # This workstation has no liquid cooling, and python3-liquidctl would require

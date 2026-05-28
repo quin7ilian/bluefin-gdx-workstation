@@ -19,7 +19,7 @@ skip-if-exists, so re-running it never clobbers customizations.
 |---|---|
 | `wrx80-bmc` | WRX80 BMC |
 
-## Fan channels (5 controllable, BMC FAN indexes 1–5)
+## Fan channels (7 controllable, BMC FAN indexes 1–7)
 
 | Channel id | Label | BMC sensor | Physical | set_duty target |
 |---|---|---|---|---|
@@ -28,10 +28,20 @@ skip-if-exists, so re-running it never clobbers customizations.
 | `bottom_hub` | Bottom hub (3× GP-18) | CHA_FAN1/WP | 3-fan bottom intake | FAN3 |
 | `top_front` | Top front (GP-14) | CHA_FAN2/WP | top front intake | FAN4 |
 | `bottom_front` | Bottom front (GP-14) | CHA_FAN3/WP | bottom front intake | FAN5 |
+| `sb_fan` | Chipset (SB_FAN1) | SB_FAN1 | board-internal chipset fan | FAN6 |
+| `mos_fan` | VRM (MOS_FAN1) | MOS_FAN1 | board-internal VRM fan | FAN7 |
 
-All five channels use `/usr/libexec/cc-set-fan-duty.sh <idx> {duty}` for
+All seven channels use `/usr/libexec/cc-set-fan-duty.sh <idx> {duty}` for
 PWM writes. The wrapper enforces a 5% BMC-validation floor (see script
 header for rationale).
+
+**⚠️ Iteration 2 caveat**: FAN6 (chipset) and FAN7 (VRM) cool critical
+board components. The curves recommended in `silent-curves-reference.md`
+have generous floors (20% / 30%) and aggressive ramp-up thresholds. Don't
+lower them without understanding your VRM thermal margin under sustained
+load. The bridge's `ExecStop` reverts these to BMC default mode if
+coolercontrold stops/crashes — so the BMC's own thermal protection
+remains the failsafe.
 
 ## Temperature sensors (12, read-only)
 
@@ -48,16 +58,15 @@ unit; achieved via `awk '... print $4*1000'`). The plugin's executor has a
 fallback that divides by 1000 if the value is > 1000, so even plain-°C
 output would still work.
 
-## Channels deliberately NOT configured (iteration 1)
+## All board fans now controllable
 
-| BMC index | IPMI sensor | Reason |
-|---|---|---|
-| FAN6 | SB_FAN1 | Chipset fan (board-internal). BMC default curve in iteration 1. |
-| FAN7 | MOS_FAN1 | VRM fan (board-internal). BMC default curve in iteration 1. |
+Iteration 1 had FAN6 (chipset) and FAN7 (VRM) on BMC default curves
+because they're tiny high-RPM screamers cooling critical components,
+and we wanted to validate the bridge architecture on case fans first.
+Iteration 2 (this version) brings them into CoolerControl with
+conservative floors and aggressive ramp-up — primary user-facing
+benefit is noise reduction at idle/light load.
 
-If you want to add these later: append a new channel entry to
-`config.json` using `/usr/libexec/cc-set-fan-duty.sh 6 {duty}` (or 7),
-then widen the wrapper's `fan_idx` validation (currently rejects ≠ 1-5,
-deliberately, so a misconfigured curve cannot accidentally touch board
-fans). Configure a conservative TEMP_VRM-driven curve with a generous
-floor (≥40%) for MOS_FAN1, and TEMP_MB-driven for SB_FAN1.
+The wrapper validates `fan_idx ∈ 1..7`. There are no BMC FAN8+ slots
+exposed by this board; if upstream coolercontrold ever asks for a
+duty on an out-of-range index, the wrapper rejects with exit 64.
