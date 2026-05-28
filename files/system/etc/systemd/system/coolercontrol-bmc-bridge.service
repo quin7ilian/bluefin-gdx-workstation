@@ -1,0 +1,21 @@
+[Unit]
+Description=BMC fan-mode bridge for CoolerControl (FAN1-5 via ASRock Rack OEM IPMI)
+# Wait for IPMI modules and /dev/ipmi0 before we try to talk to the BMC.
+After=systemd-modules-load.service
+# Run BEFORE coolercontrold so manual mode is active before CC issues writes.
+Before=coolercontrold.service
+# Bind lifecycle to coolercontrold: when it stops (clean or crash), we stop
+# too — ExecStop returns FAN1-5 to BMC auto control as a failsafe.
+BindsTo=coolercontrold.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/cc-bmc-bridge-start.sh
+ExecStop=/usr/libexec/cc-bmc-bridge-stop.sh
+
+[Install]
+# `systemctl enable` creates a symlink in coolercontrold.service.wants/
+# so whenever coolercontrold starts, this bridge is pulled in (and the
+# Before= above ensures it runs first).
+WantedBy=coolercontrold.service

@@ -1,0 +1,125 @@
+{
+  "_comment_purpose": "Template config for cc-plugin-custom-device on this WRX80 Creator R2.0 workstation. Copied to /etc/coolercontrol/plugins/custom-device/config.json by 'ujust install-cc-plugin' (skip-if-exists; safe to edit in place via UI or editor). After edits: sudo systemctl restart coolercontrold.",
+  "_comment_mapping": "Channels 1-5 → CPU_FAN1, CPU_FAN2/WP (rear), CHA_FAN1/WP (bottom hub), CHA_FAN2/WP (top front), CHA_FAN3/WP (bottom front). FAN6 (SB_FAN1) and FAN7 (MOS_FAN1) intentionally not exposed; they stay on BMC auto curves.",
+  "_comment_temps": "Temperature commands output millidegrees Celsius (CoolerControl's expected unit; awk *1000 converts).",
+  "devices": [
+    {
+      "id": "wrx80-bmc",
+      "label": "WRX80 BMC",
+      "channels": [
+        {
+          "id": "cpu_fan",
+          "label": "CPU Fan",
+          "commands": {
+            "get_rpm": "ipmitool sensor get CPU_FAN1 | awk '/Sensor Reading/{print $4}'",
+            "set_duty": "/usr/libexec/cc-set-fan-duty.sh 1 {duty}",
+            "enable_manual": "true",
+            "reset": "true"
+          }
+        },
+        {
+          "id": "rear_exhaust",
+          "label": "Rear exhaust",
+          "commands": {
+            "get_rpm": "ipmitool sensor get 'CPU_FAN2/WP' | awk '/Sensor Reading/{print $4}'",
+            "set_duty": "/usr/libexec/cc-set-fan-duty.sh 2 {duty}",
+            "enable_manual": "true",
+            "reset": "true"
+          }
+        },
+        {
+          "id": "bottom_hub",
+          "label": "Bottom hub (3× GP-18)",
+          "commands": {
+            "get_rpm": "ipmitool sensor get 'CHA_FAN1/WP' | awk '/Sensor Reading/{print $4}'",
+            "set_duty": "/usr/libexec/cc-set-fan-duty.sh 3 {duty}",
+            "enable_manual": "true",
+            "reset": "true"
+          }
+        },
+        {
+          "id": "top_front",
+          "label": "Top front (GP-14)",
+          "commands": {
+            "get_rpm": "ipmitool sensor get 'CHA_FAN2/WP' | awk '/Sensor Reading/{print $4}'",
+            "set_duty": "/usr/libexec/cc-set-fan-duty.sh 4 {duty}",
+            "enable_manual": "true",
+            "reset": "true"
+          }
+        },
+        {
+          "id": "bottom_front",
+          "label": "Bottom front (GP-14)",
+          "commands": {
+            "get_rpm": "ipmitool sensor get 'CHA_FAN3/WP' | awk '/Sensor Reading/{print $4}'",
+            "set_duty": "/usr/libexec/cc-set-fan-duty.sh 5 {duty}",
+            "enable_manual": "true",
+            "reset": "true"
+          }
+        }
+      ],
+      "temps": [
+        {
+          "id": "cpu",
+          "label": "CPU",
+          "command": "ipmitool sensor get TEMP_CPU | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "vrm",
+          "label": "VRM",
+          "command": "ipmitool sensor get TEMP_VRM | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "motherboard",
+          "label": "Motherboard",
+          "command": "ipmitool sensor get TEMP_MB | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "lan_ambient",
+          "label": "10G LAN ambient",
+          "command": "ipmitool sensor get TEMP_10G_LAN_AMB | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "ddr4_a",
+          "label": "DDR4 A",
+          "command": "ipmitool sensor get TEMP_DDR4_A | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "ddr4_b",
+          "label": "DDR4 B",
+          "command": "ipmitool sensor get TEMP_DDR4_B | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "ddr4_c",
+          "label": "DDR4 C",
+          "command": "ipmitool sensor get TEMP_DDR4_C | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "ddr4_d",
+          "label": "DDR4 D",
+          "command": "ipmitool sensor get TEMP_DDR4_D | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "ddr4_e",
+          "label": "DDR4 E",
+          "command": "ipmitool sensor get TEMP_DDR4_E | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "ddr4_f",
+          "label": "DDR4 F",
+          "command": "ipmitool sensor get TEMP_DDR4_F | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "ddr4_g",
+          "label": "DDR4 G",
+          "command": "ipmitool sensor get TEMP_DDR4_G | awk '/Sensor Reading/{print $4*1000}'"
+        },
+        {
+          "id": "ddr4_h",
+          "label": "DDR4 H",
+          "command": "ipmitool sensor get TEMP_DDR4_H | awk '/Sensor Reading/{print $4*1000}'"
+        }
+      ]
+    }
+  ]
+}

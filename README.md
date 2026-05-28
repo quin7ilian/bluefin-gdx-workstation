@@ -58,8 +58,16 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 
 **Convenience**
 - `ujust enable-insync` / `ujust disable-insync` / `ujust status-insync`
-- `ujust install-cc-plugin` — installs the CoolerControl custom-device plugin post-rebase
+- `ujust install-cc-plugin` — installs the CoolerControl custom-device plugin post-rebase (also silences the liquidctl warning)
 - `ujust upgrade-cc-plugin` — pulls the latest plugin binary from upstream and re-applies, preserving your customized `manifest.toml`
+- `ujust disable-liqctld` — flips `liquidctl_integration = false` in `/etc/coolercontrol/config.toml`. Run standalone if `install-cc-plugin` was done before this feature landed
+
+**BMC fan control bridge**
+- `coolercontrol-bmc-bridge.service` switches FAN1-5 (CPU + rear + 3× CHA channels) to BMC manual mode before coolercontrold starts, and back to default mode when it stops. Companion to `coolercontrold.service`; **upstream service file is not modified**
+- `/usr/libexec/cc-set-fan-duty.sh` does the per-channel read-modify-write of the BMC's 16-byte duty register via `ipmitool raw 0x3a 0xd6/0xda`. Wrapper has a 5% floor for BMC validation (not thermal safety — that lives in the curves)
+- FAN6 (SB_FAN1, chipset) and FAN7 (MOS_FAN1, VRM) intentionally stay on BMC auto in iteration 1
+- liquidctl integration is disabled by default (no liquid cooling here, avoids the EPEL dep)
+- `ujust install-cc-plugin` deploys a pre-populated `config.json` with all 5 fan channels and 12 temp sensors already defined for the WRX80 BMC — no manual UI setup required. Curves are still configured via the UI per `silent-curves-reference.md`. Channel definitions can be edited at `/etc/coolercontrol/plugins/custom-device/config.json`; see `channels-reference.md` for the current mapping
 
 ## Installation
 
@@ -92,11 +100,21 @@ insync show
 # Sign in to 1Password, Brave.
 
 # Install the CoolerControl custom-device plugin (one-off, lives in /var
-# and persists across image updates). Then edit
-# /etc/coolercontrol/plugins/custom-device/manifest.toml (a symlink into
-# /var) to add the per-channel ipmitool commands for the WRX80 BMC, and
-# `sudo systemctl restart coolercontrold` to load them.
+# and persists across image updates). This also:
+#   - deploys a pre-populated config.json with all 5 fan channels and 12
+#     temp sensors defined for the WRX80 BMC (skip-if-exists, so manual
+#     edits aren't clobbered)
+#   - disables the liquidctl integration (no liquid cooling on this build)
 ujust install-cc-plugin
+
+# Open the CoolerControl UI at http://localhost:11987. The WRX80 BMC
+# device with all channels appears automatically; you only need to:
+#   - Under each fan channel, configure a curve (Speed mode → Profile →
+#     Graph editor). Suggested points are in:
+#       /usr/share/cc-bmc-bridge/silent-curves-reference.md
+#
+# The BMC bridge service is enabled at build time and automatically
+# switches FAN1-5 to manual mode when CoolerControl starts.
 ```
 
 ## Verification

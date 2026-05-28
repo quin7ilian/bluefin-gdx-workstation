@@ -67,16 +67,37 @@ install-cc-plugin:
     echo "Running install.sh (sudo required — installs to /etc/coolercontrol/plugins/custom-device/)..."
     sudo sh "$tmp"
     echo
+    # Copy our pre-populated WRX80 config.json into the plugin dir so all
+    # channels (5 fans + 12 temps) are defined out of the box. Skip-if-exists
+    # so any manual edits aren't clobbered on re-runs.
+    plugin_config=/etc/coolercontrol/plugins/custom-device/config.json
+    template=/usr/share/cc-bmc-bridge/config.json
+    if [ -f "$plugin_config" ]; then
+        echo "  $plugin_config already exists — leaving as-is (skip)."
+        echo "  Template available at: $template"
+    else
+        echo "Copying pre-populated config from $template..."
+        sudo install -m644 "$template" "$plugin_config"
+        echo "  All 5 fan channels + 12 temp sensors defined; ready to use."
+    fi
+    echo
     echo "Restarting coolercontrold to load the plugin and migrate to /var/lib/coolercontrol/plugins..."
     sudo systemctl restart coolercontrold
     echo
+    echo "Also silencing the liquidctl 'package not detected' warning"
+    echo "(this workstation has no liquid cooling)..."
+    just --justfile {{justfile()}} disable-liqctld
+    echo
     echo "Done. Next steps:"
-    echo "  - Open http://localhost:11987 to see the CoolerControl UI"
-    echo "  - Edit /etc/coolercontrol/plugins/custom-device/manifest.toml"
-    echo "    (a symlink into /var/lib/coolercontrol/plugins) to add your"
-    echo "    per-channel ipmitool commands for the WRX80 BMC. Set"
-    echo "    privileged = true on commands that need root."
-    echo "  - sudo systemctl restart coolercontrold after editing"
+    echo "  - Open http://localhost:11987 to see the CoolerControl UI."
+    echo "    The WRX80 BMC device with all 5 fans and 12 temp sensors"
+    echo "    should appear automatically."
+    echo "  - Configure fan curves in the UI under each fan channel."
+    echo "    Suggested starting points:"
+    echo "      /usr/share/cc-bmc-bridge/silent-curves-reference.md"
+    echo "  - To edit channel definitions later (add FAN6/7, rename, etc.):"
+    echo "      sudo \$EDITOR /etc/coolercontrol/plugins/custom-device/config.json"
+    echo "      sudo systemctl restart coolercontrold"
 
 # Refresh cc-plugin-custom-device to the latest upstream version while
 # preserving the customized manifest.toml (the per-channel ipmitool
@@ -113,3 +134,42 @@ upgrade-cc-plugin:
     echo "Done. Plugin binary/UI upgraded; your manifest.toml customizations are preserved."
     echo "Check the new binary is loaded:"
     echo "  journalctl -u coolercontrold -b -n 20 | grep -i custom-device"
+
+# Disable CoolerControl's liquidctl integration in /etc/coolercontrol/config.toml.
+# This workstation has no liquid cooling, and python3-liquidctl would require
+# enabling EPEL (which we deliberately avoid — see AGENTS.md constraint #8).
+# Without this, coolercontrold logs a "liquidctl package not detected" warning
+# on every start and spawns liqctld as a subprocess that exits non-zero.
+# Idempotent: only edits if liquidctl_integration is currently `true`.
+disable-liqctld:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    config=/etc/coolercontrol/config.toml
+    if [ ! -f "$config" ]; then
+        echo "$config does not exist yet — coolercontrold may not have started for the first time."
+        echo "Start coolercontrold once (sudo systemctl start coolercontrold), then re-run this command."
+        exit 1
+    fi
+    if grep -qE '^liquidctl_integration = false' "$config"; then
+        echo "liquidctl_integration is already false in $config — nothing to do."
+        exit 0
+    fi
+    if ! grep -qE '^liquidctl_integration = true' "$config"; then
+        echo "Could not find 'liquidctl_integration = true' in $config."
+        echo "Either it has been hand-edited to a different value, or the setting moved in a"
+        echo "newer CoolerControl release. Check $config manually."
+        exit 1
+    fi
+    backup="${config}.bak-pre-liqctld-disable-$(date +%Y%m%d-%H%M%S)"
+    echo "Backing up $config → $backup"
+    sudo cp -a "$config" "$backup"
+    echo "Flipping liquidctl_integration to false..."
+    sudo sed -i 's/^liquidctl_integration = true$/liquidctl_integration = false/' "$config"
+    if grep -qE '^liquidctl_integration = false' "$config"; then
+        echo "Restarting coolercontrold..."
+        sudo systemctl restart coolercontrold
+        echo "Done. liquidctl warning should no longer appear on startup."
+    else
+        echo "WARNING: sed did not produce the expected result. Inspect $config and the backup."
+        exit 1
+    fi

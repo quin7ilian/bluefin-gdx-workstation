@@ -170,11 +170,19 @@ modules:
   #   MCLK to its highest DPM state on the AMD GPU at boot — fixes the
   #   Navi 33 / 5120x1440 ultrawide high-refresh blanking. The unit
   #   file is shipped via files/system/etc/systemd/system/.
+  # - coolercontrol-bmc-bridge.service: companion oneshot that switches
+  #   FAN1-5 to BMC manual mode before coolercontrold starts, and back
+  #   to default mode when it stops. Enables CoolerControl to drive the
+  #   ASRock Rack BMC's fan PWMs via the cc-set-fan-duty.sh wrapper.
+  #   BindsTo=coolercontrold.service + WantedBy=coolercontrold.service:
+  #   pulled in whenever cc starts, stops when cc stops — no need to
+  #   modify the upstream coolercontrold.service file.
   - type: systemd
     system:
       enabled:
         - coolercontrold.service
         - amdgpu-pin-mclk.service
+        - coolercontrol-bmc-bridge.service
 
   # ─── Profiling tools (kernel-coupled, must match running kernel) ─────
   # perf and bpftrace are built from the kernel source tree and read
