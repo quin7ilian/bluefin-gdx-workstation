@@ -98,6 +98,27 @@ modules:
         enabled=1
         EOF
 
+        # --- Tailscale (official CS10 repo, mesh VPN) ---
+        # `tailscaled` is a SYSTEM service (needs CAP_NET_ADMIN to
+        # manage the WireGuard interface), not a user service like
+        # Insync. Enabled via the `systemd` module below, NOT via the
+        # RPM's %systemd_post preset (BlueBuild's systemd module is
+        # the consistent enable mechanism in this recipe).
+        # First-run still requires `sudo tailscale up` once to
+        # authenticate with the tailnet — same one-time-setup pattern
+        # as Insync's first GUI sign-in.
+        rpm --import https://pkgs.tailscale.com/stable/centos/10/repo.gpg
+        cat > /etc/yum.repos.d/tailscale.repo << 'EOF'
+        [tailscale-stable]
+        name=Tailscale stable
+        baseurl=https://pkgs.tailscale.com/stable/centos/10/$basearch
+        enabled=1
+        type=rpm
+        repo_gpgcheck=1
+        gpgcheck=1
+        gpgkey=https://pkgs.tailscale.com/stable/centos/10/repo.gpg
+        EOF
+
         # Single dnf transaction (faster than multiple).
         # gnome-browser-connector (CS10 AppStream) provides the native
         # messaging host so extensions.gnome.org "Install" buttons work
@@ -106,6 +127,7 @@ modules:
           1password 1password-cli \
           brave-browser \
           insync insync-nautilus \
+          tailscale \
           gnome-browser-connector
 
         dnf clean all
@@ -225,6 +247,7 @@ modules:
         - coolercontrold.service
         - amdgpu-pin-mclk.service
         - coolercontrol-bmc-bridge.service
+        - tailscaled.service
 
   # ─── Profiling tools (kernel-coupled, must match running kernel) ─────
   # perf and bpftrace are built from the kernel source tree and read
