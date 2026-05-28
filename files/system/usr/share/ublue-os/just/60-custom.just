@@ -27,6 +27,90 @@ status-insync:
     echo
     journalctl --user -u insync.service -n 30 --no-pager
 
+# Enable and start the Proton Mail Bridge user service. Bridge runs in
+# the background (GUI hidden via --no-window) and exposes IMAP on
+# localhost:1143 and SMTP on localhost:1025 for Thunderbird/Evolution.
+#
+# First-run requirement: launch "Proton Mail Bridge" from your app menu
+# BEFORE enabling this unit. Sign in there once and let Bridge cache
+# your credentials in the GNOME keyring. After that, the systemd unit
+# can start the background process at every login without prompting.
+# (If you enable this before first-run sign-in, the unit will start,
+# fail to find credentials, and restart in a loop — harmless but noisy
+# in the journal until you do the GUI sign-in.)
+enable-protonmail-bridge:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    systemctl --user daemon-reload
+    systemctl --user enable --now protonmail-bridge.service
+    echo
+    echo "Proton Mail Bridge started in the background."
+    echo "If this is a fresh install, launch 'Proton Mail Bridge' from"
+    echo "the app menu and sign in once so credentials land in the keyring."
+    echo "Then point Thunderbird at imap://127.0.0.1:1143 / smtp://127.0.0.1:1025."
+
+# Disable and stop the Proton Mail Bridge user service.
+disable-protonmail-bridge:
+    systemctl --user disable --now protonmail-bridge.service
+
+# Show the Proton Mail Bridge user service status and recent journal.
+status-protonmail-bridge:
+    systemctl --user status protonmail-bridge.service || true
+    echo
+    journalctl --user -u protonmail-bridge.service -n 30 --no-pager
+
+# Apply the Spotify Flatpak window-decoration workaround.
+#
+# IMPORTANT: this does NOT give you a clean Spotify-themed integrated
+# header. There is no upstream path to that today
+# (flathub/com.spotify.Client #317, open since Nov 2024). The choice is:
+#   - Default Wayland Ozone (do nothing): Spotify draws its OWN client-
+#     side decoration as a blue/cyan unstyled bar (Spotify's intent,
+#     they just never styled it). No GNOME bar on top.
+#   - This workaround (X11 fallback): Spotify runs on XWayland, drops
+#     its own CSD, and gets GNOME's normal server-side titlebar on top.
+#     Trades "ugly blue bar" for "standard GNOME titlebar".
+#
+# Pick whichever you prefer aesthetically. Run `ujust unfix-spotify-
+# decoration` to revert to the Wayland/blue-bar default.
+#
+# Writes ~/.var/app/com.spotify.Client/config/spotify-flags.conf and
+# sets a per-user flatpak override. Idempotent.
+fix-spotify-decoration:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flags_dir="$HOME/.var/app/com.spotify.Client/config"
+    flags_file="$flags_dir/spotify-flags.conf"
+    mkdir -p "$flags_dir"
+    # Avoid a heredoc — just preserves the 4-space indent in the recipe
+    # body and a leading-whitespace EOF terminator wouldn't match.
+    printf '%s\n%s\n' \
+      '--ozone-platform=x11' \
+      '--disable-features=UseOzonePlatform' \
+      > "$flags_file"
+    flatpak override --user \
+      --nosocket=wayland \
+      --nosocket=fallback-x11 \
+      --socket=x11 \
+      com.spotify.Client
+    echo
+    echo "Applied X11 fallback for Spotify."
+    echo "  Wrote: $flags_file"
+    echo "  Flatpak override: wayland & fallback-x11 sockets removed, x11 added."
+    echo
+    echo "Restart Spotify for the change to take effect."
+    echo "You should now see GNOME's standard titlebar instead of the blue CSD."
+
+# Revert the Spotify decoration fix — back to Wayland/Ozone (blue CSD).
+unfix-spotify-decoration:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    flags_file="$HOME/.var/app/com.spotify.Client/config/spotify-flags.conf"
+    [ -f "$flags_file" ] && rm -f "$flags_file" && echo "Removed $flags_file."
+    flatpak override --user --reset com.spotify.Client
+    echo "Reset flatpak overrides for com.spotify.Client."
+    echo "Restart Spotify; the unstyled blue CSD will return."
+
 # Install the cc-plugin-custom-device CoolerControl plugin. The plugin
 # is NOT baked into the image — coolercontrold 4.x migrates
 # /etc/coolercontrol/plugins → symlink to /var/lib/coolercontrol/plugins

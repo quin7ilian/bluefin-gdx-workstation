@@ -1,0 +1,25 @@
+[Unit]
+Description=Proton Mail Bridge (background, GUI hidden)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+# `--no-window` launches Bridge but keeps the GUI window hidden; the
+# tray icon stays available so the user can open the GUI on demand.
+# Bridge reads its account credentials from the system keyring
+# (gnome-keyring/libsecret) on start — this is also the reason we
+# install the native RPM instead of the Flathub Flatpak, which routes
+# keyring access through xdg-desktop-portal's Secret portal and breaks
+# intermittently (flathub/ch.protonmail.protonmail-bridge #145, #136).
+#
+# First-run requirement: launch "Proton Mail Bridge" from the app menu
+# once, sign in, and let it cache credentials in the keyring. After
+# that, this unit can start the background process at every login
+# without prompting.
+Type=simple
+ExecStart=/usr/bin/protonmail-bridge --no-window
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

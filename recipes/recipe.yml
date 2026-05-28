@@ -111,6 +111,48 @@ modules:
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
 
+  # ─── Proton Mail Bridge (native RPM from proton.me) ──────────────────
+  # Proton publishes a Fedora-targeted RPM but no Fedora repo and no
+  # "latest" URL — only versioned URLs. So we pin the version here and
+  # bump it on each Bridge release. The image's daily CI rebuild does
+  # NOT auto-pick up new Bridge versions; that's a deliberate trade-off
+  # of using the native RPM over the Flathub Flatpak.
+  #
+  # Why native RPM over Flathub Flatpak (ch.protonmail.protonmail-bridge):
+  # the Flatpak is community-maintained (not Proton-verified) and has
+  # structural keyring issues — Bridge wants org.freedesktop.secrets
+  # directly; the sandbox forces it through xdg-desktop-portal's Secret
+  # portal, which intermittently drops out and breaks Thunderbird's IMAP
+  # to localhost:1143 until the user re-auths
+  # (flathub/ch.protonmail.protonmail-bridge #145, #136). Proton's own
+  # Linux setup guide only documents the native install path.
+  #
+  # Autostart is handled by a systemd --user unit at
+  # files/system/usr/lib/systemd/user/protonmail-bridge.service. Enable
+  # it post-rebase via `ujust enable-protonmail-bridge`.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+        BRIDGE_VER="3.24.2-1"
+        BRIDGE_URL="https://proton.me/download/bridge/protonmail-bridge-${BRIDGE_VER}.x86_64.rpm"
+        TMP_RPM="$(mktemp /tmp/protonmail-bridge-XXXXXX.rpm)"
+        trap 'rm -f "$TMP_RPM"' EXIT
+
+        echo "Downloading Proton Mail Bridge ${BRIDGE_VER}..."
+        curl -fsSL "$BRIDGE_URL" -o "$TMP_RPM"
+
+        # `dnf install` on a local RPM resolves dependencies from the
+        # configured repos (CS10 AppStream/BaseOS has Qt6, libsecret,
+        # etc. that Bridge links against).
+        dnf install -y "$TMP_RPM"
+
+        # Sanity check.
+        test -x /usr/bin/protonmail-bridge
+
+        dnf clean all
+        rm -rf /var/cache/dnf /var/cache/yum
+
   # ─── Thermal / IPMI: CoolerControl daemon ────────────────────────────
   # CoolerControl has no native ipmitool support
   # (gitlab.com/coolercontrol/coolercontrol issue #540), so the IPMI ↔
