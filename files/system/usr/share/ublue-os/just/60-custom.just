@@ -316,3 +316,72 @@ disable-liqctld:
         echo "WARNING: sed did not produce the expected result. Inspect $config and the backup."
         exit 1
     fi
+
+# ─── Local AI models (Ramalama) ──────────────────────────────────────
+# Two GPU-pinned llama.cpp servers via Ramalama (installed via Homebrew,
+# NOT baked into the image — `brew install ramalama`). Consumed by Zed,
+# wired in ~/.config/zed/settings.json:
+#   - ramalama-coder        GPU1 :8081  Qwen3-Coder-30B-A3B-Instruct (MoE,
+#                           tool-calling). Built-in-agent default_model +
+#                           commit_message_model. Dual-use: local sub-agent
+#                           for well-specified work + commit messages.
+#   - ramalama-autocomplete GPU0 :8080  Qwen2.5-Coder-7B-Instruct. Edit
+#                           prediction (FIM via /v1/completions, prompt_format
+#                           qwen). NOTE: edit_predictions is a SEPARATE Zed
+#                           subsystem from the chat language_models provider.
+#
+# Deliberately NOT autostarted: this box isn't headless and the 4090s are
+# also the compute GPUs for HPO/ML. Start when coding; `ujust stop-local-ai`
+# frees ~29GB across both cards before an HPO run. The first `start-local-ai`
+# pulls the models (~17GB + ~4.5GB); later starts are instant (cached in
+# ~/.local/share/ramalama). GPU pinning is via CUDA_VISIBLE_DEVICES — without
+# it, llama.cpp tensor-splits one model across both cards (not wanted here).
+
+# Start both local AI servers (coder on GPU1, autocomplete on GPU0).
+# Idempotent: skips a server that's already running, (re)creates otherwise.
+start-local-ai:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
+    command -v ramalama >/dev/null 2>&1 || { echo "ramalama not found — install it first: brew install ramalama"; exit 1; }
+    _start() {
+        name="$1"; gpu="$2"; port="$3"; model="$4"
+        if [ -n "$(podman ps -q --filter name=^${name}$ --filter status=running)" ]; then
+            echo "  $name already running (GPU$gpu :$port)"
+            return 0
+        fi
+        podman rm -f "$name" >/dev/null 2>&1 || true
+        echo "  starting $name (GPU$gpu :$port) — first run pulls the model, please wait..."
+        CUDA_VISIBLE_DEVICES="$gpu" ramalama serve -d --name "$name" -p "$port" --ngl auto "$model"
+    }
+    _start ramalama-coder        1 8081 hf://unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF
+    _start ramalama-autocomplete 0 8080 hf://Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
+    echo
+    echo "Local AI up:"
+    echo "  coder        :8081 (GPU1) — Zed built-in agent + commit messages"
+    echo "  autocomplete :8080 (GPU0) — Zed edit prediction"
+
+# Stop both local AI servers and free both 4090s (e.g. before an HPO run).
+stop-local-ai:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for n in ramalama-coder ramalama-autocomplete; do
+        if [ -n "$(podman ps -aq --filter name=^${n}$)" ]; then
+            podman stop "$n" >/dev/null 2>&1 || true
+            podman rm -f "$n" >/dev/null 2>&1 || true
+            echo "  stopped $n"
+        else
+            echo "  $n not running"
+        fi
+    done
+    echo "Both 4090s freed for compute."
+
+# Show local AI server + GPU status.
+status-local-ai:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Ramalama containers ==="
+    podman ps -a --filter name=ramalama-coder --filter name=ramalama-autocomplete || true
+    echo
+    echo "=== GPU memory ==="
+    nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv,noheader || true
