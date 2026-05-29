@@ -14,11 +14,35 @@ image-version: lts
 modules:
   # ─── System config files ─────────────────────────────────────────────
   # zram-generator override (empty file), sysctl tunings, THP tmpfiles.d,
-  # systemd user unit for insync, ujust recipes.
+  # systemd user unit for insync, ujust recipes, GNOME gschema override
+  # (disable auto-suspend), tailscaled network-online drop-in.
   - type: files
     files:
       - source: system
         destination: /
+
+  # ─── Recompile GNOME gschemas (pick up the auto-suspend override) ────
+  # files/system/usr/share/glib-2.0/schemas/zz1-bluefin-gdx-no-autosuspend
+  # .gschema.override changes the default sleep-inactive-ac-type to
+  # 'nothing' (no auto-suspend — s2idle resume hangs on this AMD box).
+  # A .override is inert until the schema dir is recompiled into
+  # gschemas.compiled. Must run AFTER the `files` module stages it.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+        override=/usr/share/glib-2.0/schemas/zz1-bluefin-gdx-no-autosuspend.gschema.override
+        test -f "$override" || { echo "ERROR: $override not staged — files module didn't run or path changed"; exit 1; }
+        glib-compile-schemas /usr/share/glib-2.0/schemas/
+        # Assert the new default actually took. GSETTINGS_BACKEND=memory
+        # makes gsettings read the compiled schema default without needing
+        # a D-Bus session / dconf (neither exists in the build container);
+        # it returns the schema default, which after the override is
+        # 'nothing'. Fails the build loudly if the override didn't apply.
+        val=$(GSETTINGS_BACKEND=memory GSETTINGS_SCHEMA_DIR=/usr/share/glib-2.0/schemas \
+          gsettings get org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type)
+        echo "Compiled default sleep-inactive-ac-type=$val"
+        test "$val" = "'nothing'" || { echo "ERROR: override didn't take, got [$val]"; exit 1; }
 
   # ─── Kernel cmdline: disable DRM modeset on Nvidia GPUs ──────────────
   # Required for AMD-primary-display + Nvidia-compute-only setup.

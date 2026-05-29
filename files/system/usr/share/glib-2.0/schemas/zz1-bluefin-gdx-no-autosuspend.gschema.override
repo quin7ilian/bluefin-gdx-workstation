@@ -1,0 +1,33 @@
+# Disable GNOME automatic system suspend on AC for this workstation.
+#
+# Bluefin/GNOME ships `sleep-inactive-ac-type='suspend'` as the schema
+# default (NOT via any dconf db — verified with `dconf read` returning
+# empty), so after 15 min idle the whole machine enters s2idle suspend.
+# This box only supports s2idle (/sys/power/mem_sleep = [s2idle]; no
+# deep/S3), and AMD + s2idle resume is a notorious hang: on 2026-05-28
+# the machine suspended at 23:09 and never resumed (PM: suspend entry
+# with no matching resume), wedged until a forced reboot. amdgpu was
+# also throwing DisplayPort link-training errors (core_link_write_dpcd
+# DP_LANE_COUNT_SET failed) on the W7500 → G95SD ultrawide — the same
+# Navi 33 + ultrawide display pipeline that already needs
+# amdgpu-pin-mclk.service.
+#
+# This is a 512 GB HPO/ML workstation that runs long jobs and hosts
+# Tailscale / CoolerControl / the BMC fan bridge, and is left on
+# overnight — it should never auto-suspend regardless of the resume
+# bug (suspend kills running jobs, drops the tailnet, stops fan
+# control). Screen-blank (DPMS) at idle-delay=300s is left ON and is
+# unaffected — DPMS-off/on is far more reliable than full s2idle.
+#
+# Overridable: this only changes the DEFAULT. The user can still turn
+# suspend back on in Settings → Power if they ever want it (that writes
+# the user dconf db, which wins over this schema default). Not locking.
+#
+# Battery keys are intentionally untouched — this desktop has no battery,
+# so sleep-inactive-battery-* never applies.
+#
+# `zz1-` prefix sorts this last so it wins over any other override files.
+# A `script` module runs glib-compile-schemas after the `files` module
+# stages this; without recompiling, the override is inert.
+[org.gnome.settings-daemon.plugins.power]
+sleep-inactive-ac-type='nothing'
