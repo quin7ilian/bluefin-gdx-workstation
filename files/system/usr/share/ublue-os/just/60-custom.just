@@ -318,24 +318,24 @@ disable-liqctld:
     fi
 
 # ─── Local AI models (Ramalama) ──────────────────────────────────────
-# Two GPU-pinned llama.cpp servers via Ramalama (installed via Homebrew,
-# NOT baked into the image — `brew install ramalama`). Consumed by Zed,
-# wired in ~/.config/zed/settings.json:
+# Three GPU-pinned llama.cpp servers via Ramalama (installed via Homebrew,
+# NOT baked into the image — `brew install ramalama`):
 #   - ramalama-coder        GPU1 :8081  Qwen3-Coder-30B-A3B-Instruct (MoE,
-#                           tool-calling). Built-in-agent default_model +
-#                           commit_message_model. Dual-use: local sub-agent
-#                           for well-specified work + commit messages.
-#   - ramalama-autocomplete GPU0 :8080  Qwen2.5-Coder-7B-Instruct. Edit
-#                           prediction (FIM via /v1/completions, prompt_format
-#                           qwen). NOTE: edit_predictions is a SEPARATE Zed
-#                           subsystem from the chat language_models provider.
+#                           tool-calling). Zed built-in-agent default_model +
+#                           commit_message_model (wired in ~/.config/zed/settings.json).
+#   - ramalama-autocomplete GPU0 :8080  Qwen2.5-Coder-7B-Instruct. DUAL-USE:
+#                           Zed edit prediction (FIM via /v1/completions,
+#                           prompt_format qwen — a SEPARATE Zed subsystem) AND
+#                           the Hermes claim-discipline flagger (chat on :8080).
+#   - ramalama-verifier     GPU0 :8082  Granite Guardian 3.3 8B. Hermes
+#                           claim-discipline groundedness verifier (NOT Zed).
 #
 # Deliberately NOT autostarted: this box isn't headless and the 4090s are
 # also the compute GPUs for HPO/ML. Start when coding; `ujust stop-local-ai`
-# frees ~29GB across both cards before an HPO run. The first `start-local-ai`
-# pulls the models (~17GB + ~4.5GB); later starts are instant (cached in
-# ~/.local/share/ramalama). GPU pinning is via CUDA_VISIBLE_DEVICES — without
-# it, llama.cpp tensor-splits one model across both cards (not wanted here).
+# frees both cards (~46GB of VRAM) before an HPO run. First `start-local-ai`
+# pulls the models (~17GB + ~4.5GB + ~5GB); later starts are instant (cached
+# in ~/.local/share/ramalama). GPU pinning is via CUDA_VISIBLE_DEVICES —
+# without it, llama.cpp tensor-splits one model across both cards (not wanted).
 
 # Start both local AI servers (coder on GPU1, autocomplete on GPU0).
 # Idempotent: skips a server that's already running, (re)creates otherwise.
@@ -356,16 +356,18 @@ start-local-ai:
     }
     _start ramalama-coder        1 8081 hf://unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF
     _start ramalama-autocomplete 0 8080 hf://Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
+    _start ramalama-verifier     0 8082 hf://ibm-granite/granite-guardian-3.3-8b-GGUF
     echo
     echo "Local AI up:"
     echo "  coder        :8081 (GPU1) — Zed built-in agent + commit messages"
-    echo "  autocomplete :8080 (GPU0) — Zed edit prediction"
+    echo "  autocomplete :8080 (GPU0) — Zed edit prediction + Hermes flagger"
+    echo "  verifier     :8082 (GPU0) — Hermes claim-discipline groundedness check"
 
 # Stop both local AI servers and free both 4090s (e.g. before an HPO run).
 stop-local-ai:
     #!/usr/bin/env bash
     set -euo pipefail
-    for n in ramalama-coder ramalama-autocomplete; do
+    for n in ramalama-coder ramalama-autocomplete ramalama-verifier; do
         if [ -n "$(podman ps -aq --filter name=^${n}$)" ]; then
             podman stop "$n" >/dev/null 2>&1 || true
             podman rm -f "$n" >/dev/null 2>&1 || true
@@ -381,7 +383,7 @@ status-local-ai:
     #!/usr/bin/env bash
     set -euo pipefail
     echo "=== Ramalama containers ==="
-    podman ps -a --filter name=ramalama-coder --filter name=ramalama-autocomplete || true
+    podman ps -a --filter name=ramalama-coder --filter name=ramalama-autocomplete --filter name=ramalama-verifier || true
     echo
     echo "=== GPU memory ==="
     nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv,noheader || true
