@@ -58,6 +58,7 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 
 **Convenience**
 - `ujust enable-insync` / `ujust disable-insync` / `ujust status-insync`
+- `ujust enable-hermes-browser` / `disable-` / `status-` — headless Brave on `127.0.0.1:9222` (Chrome DevTools Protocol) that Hermes Agent's `browser_*` tools connect to. Dedicated profile (`~/.hermes/chrome-debug`), no first-run sign-in. Pair with `hermes config set browser.cdp_url http://127.0.0.1:9222`
 - `ujust install-cc-plugin` — installs the CoolerControl custom-device plugin post-rebase (also silences the liquidctl warning)
 - `ujust upgrade-cc-plugin` — pulls the latest plugin binary from upstream and re-applies, preserving your customized `manifest.toml`
 - `ujust refresh-bmc-channels` — replaces `/etc/coolercontrol/plugins/custom-device/config.json` with the current image's template. Use after a rebase when a new image adds channels (e.g. iteration 2 added FAN6/FAN7). Backs up the existing config first

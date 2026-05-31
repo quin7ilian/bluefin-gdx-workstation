@@ -59,6 +59,37 @@ status-protonmail-bridge:
     echo
     journalctl --user -u protonmail-bridge.service -n 30 --no-pager
 
+# Enable and start the Hermes browser backend: a headless Brave instance
+# exposing the Chrome DevTools Protocol on 127.0.0.1:9222. Hermes Agent's
+# browser_* tools CONNECT to this endpoint (they don't launch a browser
+# themselves in the one-shot/ACP/Zed path), so it has to be running first.
+# Uses a dedicated profile (~/.hermes/chrome-debug), separate from your
+# daily Brave. No first-run sign-in needed — safe to enable immediately.
+#
+# Pair with the Hermes config side: `hermes config set browser.cdp_url
+# http://127.0.0.1:9222` (handled by the Hermes config repo's apply.sh).
+# For authenticated browsing later: stop this, launch Brave headful against
+# the same --user-data-dir, log in, then restart this service.
+enable-hermes-browser:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    systemctl --user daemon-reload
+    systemctl --user enable --now hermes-browser.service
+    echo
+    echo "Hermes browser backend up: headless Brave, CDP on http://127.0.0.1:9222"
+    echo "Make sure Hermes points at it:"
+    echo "  hermes config set browser.cdp_url http://127.0.0.1:9222"
+
+# Disable and stop the Hermes browser backend.
+disable-hermes-browser:
+    systemctl --user disable --now hermes-browser.service
+
+# Show the Hermes browser backend status and recent journal.
+status-hermes-browser:
+    systemctl --user status hermes-browser.service || true
+    echo
+    journalctl --user -u hermes-browser.service -n 30 --no-pager
+
 # Apply the Spotify Flatpak window-decoration workaround.
 #
 # IMPORTANT: this does NOT give you a clean Spotify-themed integrated

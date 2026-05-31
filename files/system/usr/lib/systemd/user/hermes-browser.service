@@ -1,0 +1,37 @@
+[Unit]
+Description=Headless Brave on 127.0.0.1:9222 — CDP browser backend for Hermes Agent
+Documentation=https://hermes-agent.nousresearch.com
+# Headless (--headless=new) needs no display, so no graphical-session dep.
+#
+# Why this exists: Hermes's browser_* tools drive a local Chromium-family
+# browser over the Chrome DevTools Protocol. In the one-shot / ACP / Zed
+# path the tools only *connect* to a CDP endpoint — they do NOT launch one
+# (Hermes auto-launches a browser only from its interactive `/browser`
+# command). So the endpoint must already be up; this unit guarantees it.
+# Brave is the browser because it's the one this image installs
+# (brave-browser rpm) and it's Chromium-family, so full CDP support with no
+# extra Playwright Chromium download.
+#
+# Pair with: `hermes config set browser.cdp_url http://127.0.0.1:9222`
+# (lives in the Hermes config repo, not here — this repo owns the *service*,
+# Hermes owns the *wiring* to it). Enable via `ujust enable-hermes-browser`.
+
+[Service]
+Type=simple
+# Ensure the dedicated profile dir exists (the service may be enabled before
+# the Hermes user setup runs), then clear singleton lock files a previous
+# unclean exit may have left, which would otherwise block startup. We are the
+# sole user of this profile, so removing them is safe. Leading '-' = ignore.
+ExecStartPre=-/usr/bin/mkdir -p %h/.hermes/chrome-debug
+ExecStartPre=-/usr/bin/rm -f %h/.hermes/chrome-debug/SingletonLock %h/.hermes/chrome-debug/SingletonSocket %h/.hermes/chrome-debug/SingletonCookie
+ExecStart=/usr/bin/brave-browser --headless=new \
+    --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 \
+    --user-data-dir=%h/.hermes/chrome-debug \
+    --no-first-run --no-default-browser-check --disable-background-networking
+Restart=on-failure
+RestartSec=2
+# A doc-reading browser backend shouldn't balloon; soft pressure, no hard OOM-kill.
+MemoryHigh=2G
+
+[Install]
+WantedBy=default.target
