@@ -1,0 +1,40 @@
+[Unit]
+Description=Hermes WebUI — browser chat front-end (gateway mode) for Hermes Agent
+Documentation=https://github.com/nesquena/hermes-webui
+# Why this exists: a mobile-friendly, rich (streaming, tool-call cards, markdown)
+# web chat UI for Hermes, reachable from the phone over Tailscale. Configured in
+# GATEWAY MODE (HERMES_WEBUI_CHAT_BACKEND=gateway) so it forwards chat to the
+# shared hermes-gateway backend on 127.0.0.1:8642 instead of running its own
+# agent — keeping it on the single shared brain. It is NOT containerized: the
+# agent runs in-process and must reach the local model servers without
+# container-networking friction.
+#
+# This unit owns the SERVICE only. The app code is a self-updating, home-dir
+# checkout (like hermes/claude/ramalama), NOT baked into the image:
+#   - Installed via `ujust install-hermes-webui` into ~/.hermes/webui-app
+#     (a git checkout at the latest upstream release tag — no version pinned
+#     in the image repo).
+#   - All instance config (backend URL, bind host, password, gateway API key)
+#     comes from ~/.hermes/.env — NOT from this unit. No personal data or IPs
+#     live here. See the hermes config repo's .env.example for the keys.
+# Enable via `ujust enable-hermes-webui` (after `ujust install-hermes-webui`).
+After=hermes-gateway.service
+Wants=hermes-gateway.service
+
+[Service]
+Type=simple
+# Per-instance settings (bind host incl. the Tailnet IP, port, password,
+# gateway base URL + API key, backend mode) are read from ~/.hermes/.env so
+# nothing user-specific is hardcoded in the image.
+EnvironmentFile=%h/.hermes/.env
+# Run the home-dir checkout in foreground/no-browser mode. A login shell
+# resolves the agent venv / node from the user's environment (start.sh
+# auto-discovers ~/.hermes/hermes-agent and its venv).
+WorkingDirectory=%h/.hermes/webui-app
+ExecStart=/usr/bin/bash -lc 'exec ./start.sh'
+Restart=on-failure
+RestartSec=3
+MemoryHigh=4G
+
+[Install]
+WantedBy=default.target

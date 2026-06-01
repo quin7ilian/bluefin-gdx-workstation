@@ -418,3 +418,110 @@ status-local-ai:
     echo
     echo "=== GPU memory ==="
     nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv,noheader || true
+
+# ─── Hermes single-brain backend (gateway + web UI) ──────────────────
+# The shared Hermes "brain": one long-lived gateway process exposing an
+# OpenAI-compatible API on 127.0.0.1:8642, with a mobile-friendly web UI in
+# front of it (gateway mode → same backend). Zed/ACP stays a separate process
+# that shares only the durable memory (Hindsight bank `main`), by design.
+#
+# NOT baked into the image (all self-updating, home-dir tooling): `hermes`
+# itself, and the web UI app. This image ships only the systemd units + these
+# recipes — same pattern as the Ramalama recipes (image ships the recipe; the
+# binary lives in $HOME/brew). The web UI tracks the latest upstream release
+# tag; no version is pinned in this repo.
+#
+# Prerequisites (one-time, per the hermes config repo README):
+#   - `hermes` installed and configured.
+#   - ~/.hermes/.env populated (see that repo's .env.example): the gateway's
+#     api_server platform turns ON automatically when API_SERVER_KEY is set
+#     (no `hermes gateway setup` needed), plus the HERMES_WEBUI_* keys
+#     (backend mode, gateway base URL + key, bind host, password).
+
+# Enable + start the shared Hermes gateway backend (OpenAI API on :8642).
+enable-hermes-gateway:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    systemctl --user daemon-reload
+    systemctl --user enable --now hermes-gateway.service
+    echo
+    echo "Hermes gateway started. Backend API on http://127.0.0.1:8642"
+    echo "If it isn't listening, set API_SERVER_KEY in ~/.hermes/.env"
+    echo "(the api_server platform auto-enables when that key is present),"
+    echo "then: systemctl --user restart hermes-gateway"
+
+# Disable + stop the Hermes gateway backend.
+disable-hermes-gateway:
+    systemctl --user disable --now hermes-gateway.service
+
+# Show the Hermes gateway status and recent journal.
+status-hermes-gateway:
+    systemctl --user status hermes-gateway.service || true
+    echo
+    journalctl --user -u hermes-gateway.service -n 30 --no-pager
+
+# Install the Hermes web UI into ~/.hermes/webui-app at the LATEST upstream
+# release tag. Idempotent: clones if absent, then fetches tags and checks out
+# the newest `v*` tag (detached HEAD — a tagged release, never a moving `main`,
+# and not the lagging GHCR image). No version is pinned in the OS image — the
+# app is self-updating home-dir tooling, so we don't maintain a pin here.
+# First `enable-hermes-webui` build compiles the front-end via Node (nvm), ~10-15s.
+install-hermes-webui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$HOME/.hermes/webui-app"
+    repo="https://github.com/nesquena/hermes-webui"
+    command -v git >/dev/null || { echo "git not found"; exit 1; }
+    if [ ! -d "$dir/.git" ]; then
+        echo "Cloning hermes-webui → $dir"
+        git clone "$repo" "$dir"
+    fi
+    git -C "$dir" fetch --tags --quiet
+    latest="$(git -C "$dir" tag -l 'v*' | sort -V | tail -1)"
+    [ -n "$latest" ] || { echo "No release tags found upstream"; exit 1; }
+    git -C "$dir" checkout --quiet "$latest"
+    echo "hermes-webui at $latest ($(git -C "$dir" rev-parse --short HEAD))"
+    echo "Next: ensure ~/.hermes/.env has the HERMES_WEBUI_* keys, then:"
+    echo "  ujust enable-hermes-webui"
+
+# Update the Hermes web UI to the LATEST upstream release tag and restart the
+# service if it's running. Same checkout logic as install — always tracks the
+# newest tagged release.
+update-hermes-webui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="$HOME/.hermes/webui-app"
+    [ -d "$dir/.git" ] || { echo "Not installed yet — run: ujust install-hermes-webui"; exit 1; }
+    was="$(git -C "$dir" describe --tags 2>/dev/null || echo unknown)"
+    git -C "$dir" fetch --tags --quiet
+    latest="$(git -C "$dir" tag -l 'v*' | sort -V | tail -1)"
+    [ -n "$latest" ] || { echo "No release tags found upstream"; exit 1; }
+    git -C "$dir" checkout --quiet "$latest"
+    echo "hermes-webui: $was → $latest"
+    if systemctl --user is-active --quiet hermes-webui.service; then
+        echo "Restarting hermes-webui.service to pick up the new version…"
+        systemctl --user restart hermes-webui.service
+    fi
+
+# Enable + start the Hermes web UI (gateway mode). Requires install-hermes-webui
+# first and the HERMES_WEBUI_* keys in ~/.hermes/.env.
+enable-hermes-webui:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -d "$HOME/.hermes/webui-app/.git" ] || { echo "Run 'ujust install-hermes-webui' first."; exit 1; }
+    systemctl --user daemon-reload
+    systemctl --user enable --now hermes-webui.service
+    echo
+    echo "Hermes web UI starting. With HERMES_WEBUI_HOST set to your Tailscale IP"
+    echo "and HERMES_WEBUI_PASSWORD set, reach it from your phone at:"
+    echo "  http://<your-tailscale-ip>:8787"
+
+# Disable + stop the Hermes web UI.
+disable-hermes-webui:
+    systemctl --user disable --now hermes-webui.service
+
+# Show the Hermes web UI status and recent journal.
+status-hermes-webui:
+    systemctl --user status hermes-webui.service || true
+    echo
+    journalctl --user -u hermes-webui.service -n 30 --no-pager
