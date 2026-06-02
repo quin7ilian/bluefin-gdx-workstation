@@ -1,0 +1,35 @@
+# phi-4 — the Claude Code curator model. A llama.cpp server (via Ramalama,
+# brew-installed in $HOME, NOT baked into the image) exposing an OpenAI-
+# compatible API on 127.0.0.1:8081 that the Claude Code background curator
+# calls for memory/skill-suggestion detection. Pinned to GPU1.
+#
+# Always-on by default; gated by ~/.config/local-ai/enabled (see local-ai.target
+# and `ujust toggle-ai-mode`). HPO MODE removes the flag and stops the target,
+# and the ConditionPathExists here keeps it from restarting or returning at boot
+# until you toggle back. Runs foreground (no `-d`) so systemd supervises the
+# real process — never set a podman --restart policy, that would leak past the gate.
+[Unit]
+Description=RamaLama phi-4 detector — Claude Code curator model (OpenAI API on :8081)
+PartOf=local-ai.target
+ConditionPathExists=%h/.config/local-ai/enabled
+After=local-ai.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+# CUDA_DEVICE_ORDER=PCI_BUS_ID makes the ordinal stable across reboots without
+# baking a machine-specific GPU UUID into the shipped image. GPU1 = PCI bus 02:00.0.
+# (For a strong per-machine pin, add a UUID via a user drop-in override.conf.)
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+Environment=CUDA_VISIBLE_DEVICES=1
+# Force-remove any stale container left by a hard power loss before (re)starting.
+ExecStartPre=-/usr/bin/podman rm -f ramalama-detector
+# Login shell resolves brew-installed `ramalama` from PATH; guard so we fail
+# clean if it isn't installed. `exec` so llama-server is PID 1 of the cgroup.
+ExecStart=/usr/bin/bash -lc 'command -v ramalama >/dev/null && exec ramalama serve --name ramalama-detector -p 8081 --ngl auto hf://bartowski/phi-4-GGUF'
+ExecStopPost=-/usr/bin/podman rm -f ramalama-detector
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=local-ai.target

@@ -14,7 +14,7 @@ image-version: lts
 modules:
   # ─── System config files ─────────────────────────────────────────────
   # zram-generator override (empty file), sysctl tunings, THP tmpfiles.d,
-  # systemd user units (insync, protonmail-bridge, hermes-browser), ujust
+  # systemd user units (insync, protonmail-bridge, local AI), ujust
   # recipes, GNOME gschema override (disable auto-suspend), tailscaled
   # network-online drop-in.
   - type: files

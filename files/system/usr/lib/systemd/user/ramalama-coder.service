@@ -1,0 +1,35 @@
+# Codestral 22B — the local coding model for Zed. A llama.cpp server (via
+# Ramalama, brew-installed in $HOME, NOT baked into the image) exposing an
+# OpenAI-compatible API on 127.0.0.1:8082, serving BOTH:
+#   - Zed edit-prediction / FIM autocomplete via /v1/completions (Zed builds
+#     the Codestral FIM prompt itself with prompt_format=codestral, so the
+#     llama.cpp /infill endpoint is not used).
+#   - Zed commit-message generation via /v1/chat/completions.
+# Agentic coding is handled by Claude Code, not this model. Pinned to GPU0.
+#
+# Always-on by default; gated by ~/.config/local-ai/enabled (see local-ai.target
+# and `ujust toggle-ai-mode`). HPO MODE removes the flag and stops the target,
+# and the ConditionPathExists here keeps it from restarting or returning at boot
+# until you toggle back. Runs foreground (no `-d`) so systemd supervises the
+# real process — never set a podman --restart policy, that would leak past the gate.
+[Unit]
+Description=RamaLama Codestral 22B — Zed autocomplete + commit messages (OpenAI API on :8082)
+PartOf=local-ai.target
+ConditionPathExists=%h/.config/local-ai/enabled
+After=local-ai.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+# CUDA_DEVICE_ORDER=PCI_BUS_ID makes the ordinal stable across reboots without
+# baking a machine-specific GPU UUID into the shipped image. GPU0 = PCI bus 01:00.0.
+Environment=CUDA_DEVICE_ORDER=PCI_BUS_ID
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStartPre=-/usr/bin/podman rm -f ramalama-coder
+ExecStart=/usr/bin/bash -lc 'command -v ramalama >/dev/null && exec ramalama serve --name ramalama-coder -p 8082 --ngl auto hf://bartowski/Codestral-22B-v0.1-GGUF'
+ExecStopPost=-/usr/bin/podman rm -f ramalama-coder
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=local-ai.target

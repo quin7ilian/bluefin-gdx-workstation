@@ -59,37 +59,6 @@ status-protonmail-bridge:
     echo
     journalctl --user -u protonmail-bridge.service -n 30 --no-pager
 
-# Enable and start the Hermes browser backend: a headless Brave instance
-# exposing the Chrome DevTools Protocol on 127.0.0.1:9222. Hermes Agent's
-# browser_* tools CONNECT to this endpoint (they don't launch a browser
-# themselves in the one-shot/ACP/Zed path), so it has to be running first.
-# Uses a dedicated profile (~/.hermes/chrome-debug), separate from your
-# daily Brave. No first-run sign-in needed — safe to enable immediately.
-#
-# Pair with the Hermes config side: `hermes config set browser.cdp_url
-# http://127.0.0.1:9222` (handled by the Hermes config repo's apply.sh).
-# For authenticated browsing later: stop this, launch Brave headful against
-# the same --user-data-dir, log in, then restart this service.
-enable-hermes-browser:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    systemctl --user daemon-reload
-    systemctl --user enable --now hermes-browser.service
-    echo
-    echo "Hermes browser backend up: headless Brave, CDP on http://127.0.0.1:9222"
-    echo "Make sure Hermes points at it:"
-    echo "  hermes config set browser.cdp_url http://127.0.0.1:9222"
-
-# Disable and stop the Hermes browser backend.
-disable-hermes-browser:
-    systemctl --user disable --now hermes-browser.service
-
-# Show the Hermes browser backend status and recent journal.
-status-hermes-browser:
-    systemctl --user status hermes-browser.service || true
-    echo
-    journalctl --user -u hermes-browser.service -n 30 --no-pager
-
 # Apply the Spotify Flatpak window-decoration workaround.
 #
 # IMPORTANT: this does NOT give you a clean Spotify-themed integrated
@@ -348,180 +317,60 @@ disable-liqctld:
         exit 1
     fi
 
-# ─── Local AI models (Ramalama) ──────────────────────────────────────
-# Three GPU-pinned llama.cpp servers via Ramalama (installed via Homebrew,
-# NOT baked into the image — `brew install ramalama`):
-#   - ramalama-coder        GPU1 :8081  Qwen3-Coder-30B-A3B-Instruct (MoE,
-#                           tool-calling). Zed built-in-agent default_model +
-#                           commit_message_model (wired in ~/.config/zed/settings.json).
-#   - ramalama-autocomplete GPU0 :8080  Qwen2.5-Coder-7B-Instruct. DUAL-USE:
-#                           Zed edit prediction (FIM via /v1/completions,
-#                           prompt_format qwen — a SEPARATE Zed subsystem) AND
-#                           the Hermes claim-discipline flagger (chat on :8080).
-#   - ramalama-verifier     GPU0 :8082  Granite Guardian 3.3 8B. Hermes
-#                           claim-discipline groundedness verifier (NOT Zed).
+# ─── Local AI models (Ramalama, gated) ───────────────────────────────
+# Two GPU-pinned llama.cpp servers via Ramalama (brew-installed, NOT baked
+# into the image), managed as systemd user services under local-ai.target
+# and gated by the flag file ~/.config/local-ai/enabled:
+#   - ramalama-detector  GPU1 :8081  phi-4 — the Claude Code curator model
+#                        (background memory/skill detection over its OpenAI API).
+#   - ramalama-coder     GPU0 :8082  Codestral 22B — Zed edit-prediction (FIM
+#                        autocomplete via /v1/completions, prompt_format codestral)
+#                        AND commit-message generation (/v1/chat/completions).
 #
-# Deliberately NOT autostarted: this box isn't headless and the 4090s are
-# also the compute GPUs for HPO/ML. Start when coding; `ujust stop-local-ai`
-# frees both cards (~46GB of VRAM) before an HPO run. First `start-local-ai`
-# pulls the models (~17GB + ~4.5GB + ~5GB); later starts are instant (cached
-# in ~/.local/share/ramalama). GPU pinning is via CUDA_VISIBLE_DEVICES —
-# without it, llama.cpp tensor-splits one model across both cards (not wanted).
+# Default is AI MODE: both models auto-start at login, auto-restart on crash,
+# and survive reboot. Before a heavy HPO run, `ujust toggle-ai-mode` flips to
+# HPO MODE — both models stop and STAY off (no auto-restart, no return on
+# reboot) until you toggle back, freeing both 4090s. The flag is the hard gate
+# (ConditionPathExists on every unit); local-ai.target groups them so one
+# toggle governs all present and future local GPU models. First start pulls the
+# models into ~/.local/share/ramalama (~9GB + ~13GB); later starts are instant.
 
-# Start both local AI servers (coder on GPU1, autocomplete on GPU0).
-# Idempotent: skips a server that's already running, (re)creates otherwise.
-start-local-ai:
+# Flip between AI MODE (local models on) and HPO MODE (off — both 4090s freed).
+toggle-ai-mode:
     #!/usr/bin/env bash
     set -euo pipefail
-    export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
-    command -v ramalama >/dev/null 2>&1 || { echo "ramalama not found — install it first: brew install ramalama"; exit 1; }
-    _start() {
-        name="$1"; gpu="$2"; port="$3"; model="$4"
-        if [ -n "$(podman ps -q --filter name=^${name}$ --filter status=running)" ]; then
-            echo "  $name already running (GPU$gpu :$port)"
-            return 0
-        fi
-        podman rm -f "$name" >/dev/null 2>&1 || true
-        echo "  starting $name (GPU$gpu :$port) — first run pulls the model, please wait..."
-        CUDA_VISIBLE_DEVICES="$gpu" ramalama serve -d --name "$name" -p "$port" --ngl auto "$model"
-    }
-    _start ramalama-coder        1 8081 hf://unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF
-    _start ramalama-autocomplete 0 8080 hf://Qwen/Qwen2.5-Coder-7B-Instruct-GGUF
-    _start ramalama-verifier     0 8082 hf://ibm-granite/granite-guardian-3.3-8b-GGUF
-    echo
-    echo "Local AI up:"
-    echo "  coder        :8081 (GPU1) — Zed built-in agent + commit messages"
-    echo "  autocomplete :8080 (GPU0) — Zed edit prediction + Hermes flagger"
-    echo "  verifier     :8082 (GPU0) — Hermes claim-discipline groundedness check"
-
-# Stop both local AI servers and free both 4090s (e.g. before an HPO run).
-stop-local-ai:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    for n in ramalama-coder ramalama-autocomplete ramalama-verifier; do
-        if [ -n "$(podman ps -aq --filter name=^${n}$)" ]; then
-            podman stop "$n" >/dev/null 2>&1 || true
-            podman rm -f "$n" >/dev/null 2>&1 || true
-            echo "  stopped $n"
-        else
-            echo "  $n not running"
-        fi
-    done
-    echo "Both 4090s freed for compute."
-
-# Show local AI server + GPU status.
-status-local-ai:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    echo "=== Ramalama containers ==="
-    podman ps -a --filter name=ramalama-coder --filter name=ramalama-autocomplete --filter name=ramalama-verifier || true
-    echo
-    echo "=== GPU memory ==="
-    nvidia-smi --query-gpu=index,name,memory.used,memory.total --format=csv,noheader || true
-
-# ─── Hermes single-brain backend (gateway + web UI) ──────────────────
-# The shared Hermes "brain": one long-lived gateway process exposing an
-# OpenAI-compatible API on 127.0.0.1:8642, with a mobile-friendly web UI in
-# front of it (gateway mode → same backend). Zed/ACP stays a separate process
-# that shares only the durable memory (Hindsight bank `main`), by design.
-#
-# NOT baked into the image (all self-updating, home-dir tooling): `hermes`
-# itself, and the web UI app. This image ships only the systemd units + these
-# recipes — same pattern as the Ramalama recipes (image ships the recipe; the
-# binary lives in $HOME/brew). The web UI tracks the latest upstream release
-# tag; no version is pinned in this repo.
-#
-# Prerequisites (one-time, per the hermes config repo README):
-#   - `hermes` installed and configured.
-#   - ~/.hermes/.env populated (see that repo's .env.example): the gateway's
-#     api_server platform turns ON automatically when API_SERVER_KEY is set
-#     (no `hermes gateway setup` needed), plus the HERMES_WEBUI_* keys
-#     (backend mode, gateway base URL + key, bind host, password).
-
-# Enable + start the shared Hermes gateway backend (OpenAI API on :8642).
-enable-hermes-gateway:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    systemctl --user daemon-reload
-    systemctl --user enable --now hermes-gateway.service
-    echo
-    echo "Hermes gateway started. Backend API on http://127.0.0.1:8642"
-    echo "If it isn't listening, set API_SERVER_KEY in ~/.hermes/.env"
-    echo "(the api_server platform auto-enables when that key is present),"
-    echo "then: systemctl --user restart hermes-gateway"
-
-# Disable + stop the Hermes gateway backend.
-disable-hermes-gateway:
-    systemctl --user disable --now hermes-gateway.service
-
-# Show the Hermes gateway status and recent journal.
-status-hermes-gateway:
-    systemctl --user status hermes-gateway.service || true
-    echo
-    journalctl --user -u hermes-gateway.service -n 30 --no-pager
-
-# Install the Hermes web UI into ~/.hermes/webui-app at the LATEST upstream
-# release tag. Idempotent: clones if absent, then fetches tags and checks out
-# the newest `v*` tag (detached HEAD — a tagged release, never a moving `main`,
-# and not the lagging GHCR image). No version is pinned in the OS image — the
-# app is self-updating home-dir tooling, so we don't maintain a pin here.
-# First `enable-hermes-webui` build compiles the front-end via Node (nvm), ~10-15s.
-install-hermes-webui:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dir="$HOME/.hermes/webui-app"
-    repo="https://github.com/nesquena/hermes-webui"
-    command -v git >/dev/null || { echo "git not found"; exit 1; }
-    if [ ! -d "$dir/.git" ]; then
-        echo "Cloning hermes-webui → $dir"
-        git clone "$repo" "$dir"
-    fi
-    git -C "$dir" fetch --tags --quiet
-    latest="$(git -C "$dir" tag -l 'v*' | sort -V | tail -1)"
-    [ -n "$latest" ] || { echo "No release tags found upstream"; exit 1; }
-    git -C "$dir" checkout --quiet "$latest"
-    echo "hermes-webui at $latest ($(git -C "$dir" rev-parse --short HEAD))"
-    echo "Next: ensure ~/.hermes/.env has the HERMES_WEBUI_* keys, then:"
-    echo "  ujust enable-hermes-webui"
-
-# Update the Hermes web UI to the LATEST upstream release tag and restart the
-# service if it's running. Same checkout logic as install — always tracks the
-# newest tagged release.
-update-hermes-webui:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    dir="$HOME/.hermes/webui-app"
-    [ -d "$dir/.git" ] || { echo "Not installed yet — run: ujust install-hermes-webui"; exit 1; }
-    was="$(git -C "$dir" describe --tags 2>/dev/null || echo unknown)"
-    git -C "$dir" fetch --tags --quiet
-    latest="$(git -C "$dir" tag -l 'v*' | sort -V | tail -1)"
-    [ -n "$latest" ] || { echo "No release tags found upstream"; exit 1; }
-    git -C "$dir" checkout --quiet "$latest"
-    echo "hermes-webui: $was → $latest"
-    if systemctl --user is-active --quiet hermes-webui.service; then
-        echo "Restarting hermes-webui.service to pick up the new version…"
-        systemctl --user restart hermes-webui.service
+    flag="$HOME/.config/local-ai/enabled"
+    if [ -f "$flag" ]; then
+        # → HPO MODE. Remove the gate FIRST so a queued/boot start can't slip
+        # through it, then stop the target (PartOf propagates to the services).
+        rm -f "$flag"
+        systemctl --user stop local-ai.target
+        podman rm -f ramalama-detector ramalama-coder >/dev/null 2>&1 || true
+        echo "HPO MODE — local AI models stopped; both 4090s freed for compute."
+    else
+        # → AI MODE.
+        mkdir -p "$(dirname "$flag")"
+        touch "$flag"
+        # Idempotently enable so the wants symlinks exist (needed on a fresh
+        # image where nothing has enabled them yet): local-ai.target into
+        # default.target so AI mode survives reboot, and each service into
+        # local-ai.target. Then start the target.
+        systemctl --user enable local-ai.target ramalama-detector.service ramalama-coder.service >/dev/null 2>&1 || true
+        systemctl --user start local-ai.target
+        echo "AI MODE — local AI models starting (phi-4 :8081, Codestral :8082)."
+        echo "First start pulls the models; watch progress with: ujust status-ai-mode"
     fi
 
-# Enable + start the Hermes web UI (gateway mode). Requires install-hermes-webui
-# first and the HERMES_WEBUI_* keys in ~/.hermes/.env.
-enable-hermes-webui:
+# Show the current mode (AI vs HPO), the unit states, and GPU usage.
+status-ai-mode:
     #!/usr/bin/env bash
     set -euo pipefail
-    [ -d "$HOME/.hermes/webui-app/.git" ] || { echo "Run 'ujust install-hermes-webui' first."; exit 1; }
-    systemctl --user daemon-reload
-    systemctl --user enable --now hermes-webui.service
+    if [ -f "$HOME/.config/local-ai/enabled" ]; then
+        echo "Mode: AI MODE  (local models enabled)"
+    else
+        echo "Mode: HPO MODE (local models gated off)"
+    fi
     echo
-    echo "Hermes web UI starting. With HERMES_WEBUI_HOST set to your Tailscale IP"
-    echo "and HERMES_WEBUI_PASSWORD set, reach it from your phone at:"
-    echo "  http://<your-tailscale-ip>:8787"
-
-# Disable + stop the Hermes web UI.
-disable-hermes-webui:
-    systemctl --user disable --now hermes-webui.service
-
-# Show the Hermes web UI status and recent journal.
-status-hermes-webui:
-    systemctl --user status hermes-webui.service || true
+    systemctl --user list-units --all --no-legend --no-pager 'local-ai.target' 'ramalama-*.service' || true
     echo
-    journalctl --user -u hermes-webui.service -n 30 --no-pager
+    nvidia-smi --query-gpu=index,name,memory.used,memory.free,memory.total --format=csv,noheader || true
