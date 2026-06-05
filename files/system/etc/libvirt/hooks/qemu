@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# libvirt qemu hook — hand a dedicated GPU to a passthrough VM WITHOUT tearing
+# down the other GPU's local-AI model.
+#
+# libvirt invokes this as:  qemu <vm-name> <operation> <sub-operation> <extra>
+#   prepare/begin : before libvirt allocates resources / detaches the GPU
+#   release/end   : after the VM is gone and the GPU has been reattached
+#
+# We free the passed-through card's local-AI service BEFORE libvirt's managed
+# detach binds it to vfio-pci (otherwise the detach fails "device busy"), and we
+# restore it AFTER shutdown — but only if AI mode is on, so this never fights
+# `ujust toggle-ai-mode` / the HPO-mode gate.
+#
+# NOTHING machine-specific is hardcoded here. The target VM, the owning user +
+# uid, the GPU PCI id and the service to free are all discovered by
+# `ujust setup-vm-host` and written to the config file below. This script just
+# consumes them, so the image stays generic.
+set -u
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+GUEST="${1:-}"; OP="${2:-}"; SUBOP="${3:-}"
+CONF=/etc/bluefin-gdx/vm-passthrough.conf
+
+log() { logger -t libvirt-vm-passthrough-hook -- "$*"; }
+
+# No config yet (e.g. fresh image before `ujust setup-vm-host`) → do nothing,
+# and never block a VM start.
+[ -r "$CONF" ] || { log "no $CONF (run 'ujust setup-vm-host'); skipping for ${GUEST}"; exit 0; }
+# Config is root-owned KEY=value pairs: TARGET_VM, VM_USER, VM_UID, GPU_BUSID,
+# GPU_SERVICE, AI_FLAG.
+# shellcheck disable=SC1090
+. "$CONF"
+
+: "${TARGET_VM:=}" "${VM_USER:=}" "${VM_UID:=}" "${GPU_SERVICE:=}" "${GPU_BUSID:=}" "${AI_FLAG:=}"
+
+# Only act on the configured VM; everything else passes straight through.
+[ "$GUEST" = "$TARGET_VM" ] || exit 0
+if [ -z "$VM_USER" ] || [ -z "$VM_UID" ] || [ -z "$GPU_SERVICE" ]; then
+  log "ERROR: $CONF is incomplete (need VM_USER/VM_UID/GPU_SERVICE); skipping ${GUEST}"
+  exit 0
+fi
+
+# Drive VM_USER's --user systemd manager from this root hook.
+user_systemctl() {
+  runuser -u "$VM_USER" -- \
+    env "XDG_RUNTIME_DIR=/run/user/${VM_UID}" systemctl --user "$@"
+}
+
+gpu_mem_used() {
+  [ -n "$GPU_BUSID" ] || { echo ""; return; }
+  nvidia-smi -i "$GPU_BUSID" --query-gpu=memory.used \
+    --format=csv,noheader,nounits 2>/dev/null | tr -d ' '
+}
+
+case "${OP}/${SUBOP}" in
+  prepare/begin)
+    # Free the GPU before libvirt's managed detach binds it to vfio-pci.
+    log "prepare: stopping ${GPU_SERVICE} (user ${VM_USER}) to free ${GPU_BUSID:-its GPU}"
+    user_systemctl stop "$GPU_SERVICE" || log "WARN: stop ${GPU_SERVICE} returned non-zero"
+    # Source of truth: is the card actually idle now? If not, abort the start
+    # with a clear message rather than letting the vfio detach fail cryptically.
+    used="$(gpu_mem_used)"
+    if [ -n "$used" ] && [ "$used" -ge 500 ] 2>/dev/null; then
+      log "ERROR: ${GPU_BUSID} still has ${used} MiB in use; aborting ${TARGET_VM} start"
+      echo "vm-passthrough hook: ${GPU_BUSID} still busy (${used} MiB) — free it before starting ${TARGET_VM}" >&2
+      exit 1
+    fi
+    log "prepare: GPU is free (${used:-unknown} MiB)"
+    ;;
+  release/end)
+    # VM gone, GPU reattached to nvidia. Bring the model back only if AI mode
+    # is enabled, so HPO mode (flag absent) is respected.
+    if [ -n "$AI_FLAG" ] && [ -f "$AI_FLAG" ]; then
+      log "release: AI mode on — restarting ${GPU_SERVICE}"
+      user_systemctl start "$GPU_SERVICE" || log "WARN: start ${GPU_SERVICE} returned non-zero"
+    else
+      log "release: AI mode off (flag absent) — leaving ${GPU_SERVICE} stopped"
+    fi
+    ;;
+esac
+
+exit 0

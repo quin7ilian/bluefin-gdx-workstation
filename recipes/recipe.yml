@@ -356,5 +356,47 @@ modules:
         test -L /usr/bin/zed
         test -f /usr/share/applications/dev.zed.Zed.desktop
 
+  # ─── Virtualization GUI + GPU-passthrough VM host bits ───────────────
+  # The full KVM stack (libvirt, qemu-kvm, virtiofsd, swtpm, edk2-ovmf) is
+  # ALREADY in the bluefin-gdx base and `virtqemud` is pre-enabled — we do
+  # NOT re-install any of it. Two gaps are filled here:
+  #   1. virt-manager (the GTK GUI). The base ships only virt-manager-common
+  #      (backend data), not the window. Layered as an RPM rather than the
+  #      Flatpak so it talks to the system libvirt socket without the
+  #      Flatpak's /run/libvirt access workaround. From CS10 AppStream.
+  #      (SPICE was removed in EL10, so the VM console is VNC — see the
+  #      win11-trading.xml template shipped below.)
+  #   2. The libvirt qemu hook staged at /etc/libvirt/hooks/qemu (via the
+  #      `files` module) must be executable, or libvirt silently won't run
+  #      it. chmod + assert here.
+  #
+  # The Win11 trading VM itself (one RTX 4090 passed through + Sunshine) is
+  # finished post-rebase via `ujust setup-vm-host`: it adds you to the libvirt
+  # group, installs the Moonlight client, activates the default NAT network,
+  # and DISCOVERS your user/uid + the target GPU + its pinned local-AI service
+  # into /etc/bluefin-gdx/vm-passthrough.conf (which the hook reads — so no
+  # username or GPU id is baked into the image). The kvm.ignore_msrs
+  # Windows-stability karg ships as a kargs.d drop-in at
+  # files/system/usr/lib/bootc/kargs.d/10-vm-windows.toml.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+
+        # virt-manager GUI (CS10 AppStream — base already pulled in its deps
+        # via virt-manager-common, so this is a small add).
+        dnf install -y virt-manager
+        dnf clean all
+        rm -rf /var/cache/dnf /var/cache/yum
+
+        # The qemu hook is staged read-only by the `files` module (which runs
+        # first); libvirt only executes hooks that are +x. Fail loudly if the
+        # path ever moves so we don't silently ship a dead hook.
+        hook=/etc/libvirt/hooks/qemu
+        test -f "$hook" || { echo "ERROR: $hook not staged — files module didn't run or path changed"; exit 1; }
+        chmod 0755 "$hook"
+        test -x "$hook"
+        echo "qemu hook present and executable: $hook"
+
   # ─── Image signing (cosign) ──────────────────────────────────────────
   - type: signing
