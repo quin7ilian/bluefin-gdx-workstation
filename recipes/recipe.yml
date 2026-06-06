@@ -447,5 +447,55 @@ modules:
         test -x "$hook"
         echo "qemu hook present and executable: $hook"
 
+  # ─── Regenerate the initramfs (bake compute-only into the ramdisk) ───
+  # MUST be last (before signing) so it captures every prior change.
+  #
+  # The compute-only module trims nvidia_drm/nvidia_modeset from the dracut
+  # force_drivers and blacklists them — but the BASE image's prebuilt initramfs
+  # still force-loads them, so on first boot they come up BEFORE the real-root
+  # modprobe.d blacklist can take effect (confirmed at runtime: `lsmod` showed
+  # nvidia_drm/nvidia_modeset loaded and gnome-shell holding /dev/nvidia-modeset).
+  # The only fix is to rebuild the ramdisk so the trim + blacklist are baked in.
+  #
+  # This MUST happen at build time:
+  #   - Bluefin sets LockLayering=true, so client `rpm-ostree initramfs --enable`
+  #     is refused ("Cannot operate; LockLayering=true").
+  #   - BlueBuild's own `initramfs` module refuses on this CS10 base (its guard
+  #     is `OS_VERSION <= 40`; VERSION_ID here is 10).
+  # So we run dracut directly with the SAME incantation that module uses
+  # (--add ostree --no-hostonly --reproducible), plus an explicit --omit-drivers
+  # and a build-time assertion for certainty.
+  #
+  # CUDA is untouched: `nvidia` + `nvidia_uvm` stay force-loaded; only the
+  # graphics DRM/modeset pair is removed.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+        # Resolve the (single) installed kernel by its vmlinuz.
+        kver=""
+        for d in /usr/lib/modules/*/; do
+          [ -f "${d}vmlinuz" ] && kver="$(basename "$d")"
+        done
+        test -n "$kver" || { echo "ERROR: no kernel with vmlinuz under /usr/lib/modules"; ls -la /usr/lib/modules; exit 1; }
+        img="/usr/lib/modules/${kver}/initramfs.img"
+        echo "Regenerating initramfs for kernel ${kver} -> ${img}"
+
+        # Same flags as BlueBuild's initramfs module (ostree boot module is
+        # REQUIRED or the system won't boot), plus an explicit omit of the
+        # graphics modules.
+        dracut --kver "$kver" --force --add 'ostree' --no-hostonly --reproducible \
+          --omit-drivers 'nvidia_drm nvidia_modeset' "$img"
+        chmod 0600 "$img"
+
+        # Fail the build loudly if the graphics modules slipped back in.
+        if command -v lsinitrd >/dev/null 2>&1; then
+          if lsinitrd "$img" 2>/dev/null | grep -Eiq 'nvidia_(drm|modeset)'; then
+            echo "ERROR: nvidia_drm/nvidia_modeset still present in regenerated initramfs"
+            exit 1
+          fi
+          echo "Verified: nvidia_drm/nvidia_modeset absent from regenerated initramfs"
+        fi
+
   # ─── Image signing (cosign) ──────────────────────────────────────────
   - type: signing
