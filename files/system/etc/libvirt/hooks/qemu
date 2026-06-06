@@ -1,20 +1,22 @@
 #!/usr/bin/env bash
-# libvirt qemu hook — hand a dedicated GPU to a passthrough VM WITHOUT tearing
-# down the other GPU's local-AI model.
+# libvirt qemu hook — hand a dedicated NVIDIA GPU to a passthrough VM, cleanly.
 #
 # libvirt invokes this as:  qemu <vm-name> <operation> <sub-operation> <extra>
 #   prepare/begin : before libvirt allocates resources / detaches the GPU
-#   release/end   : after the VM is gone and the GPU has been reattached
+#   started/begin : VM is up and owns the GPU
+#   release/end   : VM is gone and the GPU has been reattached to nvidia
 #
-# We free the passed-through card's local-AI service BEFORE libvirt's managed
-# detach binds it to vfio-pci (otherwise the detach fails "device busy"), and we
-# restore it AFTER shutdown — but only if AI mode is on, so this never fights
-# `ujust toggle-ai-mode` / the HPO-mode gate.
+# THE HARD RULE (learned the hard way): libvirt's managed detach binds the GPU
+# to vfio-pci, and that HANGS THE KERNEL if anything still has the GPU's
+# /dev/nvidiaN open ("NVRM: ... non-zero usage count"), forcing a reboot. So we
+# must drive the GPU to ZERO open handles and VERIFY it (with fuser on the
+# device node — NOT a memory threshold, which lies). With the cards configured
+# compute-only (no nvidia_drm/modeset — see the recipe), the only openers are
+# CUDA jobs (the local-AI models) and coolercontrold's NVML reads; we stop those
+# and re-check. If anything ELSE still holds the card (e.g. a stray HPO job) we
+# REFUSE the start and restore what we stopped, rather than wedge the box.
 #
-# NOTHING machine-specific is hardcoded here. The target VM, the owning user +
-# uid, the GPU PCI id and the service to free are all discovered by
-# `ujust setup-vm-host` and written to the config file below. This script just
-# consumes them, so the image stays generic.
+# Machine-specific values come from the conf written by `ujust setup-vm-host`.
 set -u
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
@@ -23,59 +25,108 @@ CONF=/etc/bluefin-gdx/vm-passthrough.conf
 
 log() { logger -t libvirt-vm-passthrough-hook -- "$*"; }
 
-# No config yet (e.g. fresh image before `ujust setup-vm-host`) → do nothing,
-# and never block a VM start.
 [ -r "$CONF" ] || { log "no $CONF (run 'ujust setup-vm-host'); skipping for ${GUEST}"; exit 0; }
-# Config is root-owned KEY=value pairs: TARGET_VM, VM_USER, VM_UID, GPU_BUSID,
-# GPU_SERVICE, AI_FLAG.
 # shellcheck disable=SC1090
 . "$CONF"
+: "${TARGET_VM:=}" "${VM_USER:=}" "${VM_UID:=}" "${GPU_BUSID:=}" "${AI_FLAG:=}"
 
-: "${TARGET_VM:=}" "${VM_USER:=}" "${VM_UID:=}" "${GPU_SERVICE:=}" "${GPU_BUSID:=}" "${AI_FLAG:=}"
-
-# Only act on the configured VM; everything else passes straight through.
 [ "$GUEST" = "$TARGET_VM" ] || exit 0
-if [ -z "$VM_USER" ] || [ -z "$VM_UID" ] || [ -z "$GPU_SERVICE" ]; then
-  log "ERROR: $CONF is incomplete (need VM_USER/VM_UID/GPU_SERVICE); skipping ${GUEST}"
+if [ -z "$VM_USER" ] || [ -z "$VM_UID" ] || [ -z "$GPU_BUSID" ]; then
+  log "ERROR: $CONF incomplete (need VM_USER/VM_UID/GPU_BUSID); skipping ${GUEST}"
   exit 0
 fi
 
-# Drive VM_USER's --user systemd manager from this root hook.
 user_systemctl() {
-  runuser -u "$VM_USER" -- \
-    env "XDG_RUNTIME_DIR=/run/user/${VM_UID}" systemctl --user "$@"
+  runuser -u "$VM_USER" -- env "XDG_RUNTIME_DIR=/run/user/${VM_UID}" systemctl --user "$@"
 }
 
-gpu_mem_used() {
-  [ -n "$GPU_BUSID" ] || { echo ""; return; }
-  nvidia-smi -i "$GPU_BUSID" --query-gpu=memory.used \
-    --format=csv,noheader,nounits 2>/dev/null | tr -d ' '
+# Resolve the GPU's /dev/nvidiaN char device from its PCI id — that's the node
+# the detach needs unused. GPU_BUSID is nvidia-smi's 8-digit-domain form; the
+# proc tree uses the 4-digit form (e.g. 0000:02:00.0).
+gpu_devnode() {
+  local short="${GPU_BUSID#0000}" minor
+  minor=$(grep -i 'Device Minor' "/proc/driver/nvidia/gpus/${short}/information" 2>/dev/null \
+            | grep -oE '[0-9]+' | head -1)
+  [ -n "$minor" ] && printf '/dev/nvidia%s' "$minor"
+}
+
+# Return 0 if the GPU still has open handles, 1 if it is free.
+gpu_busy() {
+  local dn; dn="$(gpu_devnode)"
+  if [ -n "$dn" ] && [ -e "$dn" ]; then
+    fuser -s "$dn" 2>/dev/null && return 0 || return 1
+  fi
+  # Fallback if we can't resolve the node (e.g. already detached): any compute apps?
+  [ -n "$(nvidia-smi -i "$GPU_BUSID" --query-compute-apps=pid --format=csv,noheader 2>/dev/null)" ]
+}
+
+# Stop the known NVIDIA consumers so the card can be released. local-ai.target
+# covers both ramalama models (the GPU-1 model AND the GPU-0 model, which opens
+# GPU-1's node too via CUDA's all-GPU enumeration). coolercontrold reads the
+# cards via NVML.
+stop_gpu_consumers() {
+  log "freeing ${GPU_BUSID}: stopping local-ai.target + coolercontrold"
+  user_systemctl stop local-ai.target 2>/dev/null || true
+  systemctl stop coolercontrold.service 2>/dev/null || true
+}
+
+# Restore consumers: fans always; local-AI only if AI mode is on (respects the
+# HPO-mode gate). Used on the refuse path and on VM teardown.
+restore_gpu_consumers() {
+  systemctl start coolercontrold.service 2>/dev/null || log "WARN: could not start coolercontrold"
+  if [ -n "$AI_FLAG" ] && [ -f "$AI_FLAG" ]; then
+    user_systemctl start local-ai.target 2>/dev/null || log "WARN: could not start local-ai.target"
+  fi
 }
 
 case "${OP}/${SUBOP}" in
   prepare/begin)
-    # Free the GPU before libvirt's managed detach binds it to vfio-pci.
-    log "prepare: stopping ${GPU_SERVICE} (user ${VM_USER}) to free ${GPU_BUSID:-its GPU}"
-    user_systemctl stop "$GPU_SERVICE" || log "WARN: stop ${GPU_SERVICE} returned non-zero"
-    # Source of truth: is the card actually idle now? If not, abort the start
-    # with a clear message rather than letting the vfio detach fail cryptically.
-    used="$(gpu_mem_used)"
-    if [ -n "$used" ] && [ "$used" -ge 500 ] 2>/dev/null; then
-      log "ERROR: ${GPU_BUSID} still has ${used} MiB in use; aborting ${TARGET_VM} start"
-      echo "vm-passthrough hook: ${GPU_BUSID} still busy (${used} MiB) — free it before starting ${TARGET_VM}" >&2
+    # 1) Pre-flight: every disk/ISO source must exist BEFORE we touch the GPU,
+    #    so a bad path can't wedge the detach. libvirt passes domain XML on stdin.
+    if [ ! -t 0 ]; then xml="$(cat)"; else xml=""; fi
+    missing=""
+    while IFS= read -r f; do
+      [ -n "$f" ] && [ ! -e "$f" ] && missing="${missing} ${f}"
+    done < <(printf '%s\n' "$xml" \
+      | grep -oE "<source file=['\"][^'\"]+['\"]" \
+      | sed -E "s/.*file=['\"]([^'\"]+)['\"].*/\1/")
+    if [ -n "$missing" ]; then
+      log "ERROR: missing disk source(s):${missing} — refusing ${TARGET_VM} (GPU untouched)"
+      echo "vm-passthrough hook: missing disk source file(s):${missing} — fix the path(s) before starting ${TARGET_VM}" >&2
       exit 1
     fi
-    log "prepare: GPU is free (${used:-unknown} MiB)"
-    ;;
-  release/end)
-    # VM gone, GPU reattached to nvidia. Bring the model back only if AI mode
-    # is enabled, so HPO mode (flag absent) is respected.
-    if [ -n "$AI_FLAG" ] && [ -f "$AI_FLAG" ]; then
-      log "release: AI mode on — restarting ${GPU_SERVICE}"
-      user_systemctl start "$GPU_SERVICE" || log "WARN: start ${GPU_SERVICE} returned non-zero"
-    else
-      log "release: AI mode off (flag absent) — leaving ${GPU_SERVICE} stopped"
+
+    # 2) Drive the GPU to zero open handles, then VERIFY. This is the check that
+    #    actually prevents the vfio-detach kernel wedge.
+    if gpu_busy; then
+      stop_gpu_consumers
+      # CUDA/NVML contexts release as the processes exit; allow a bounded moment.
+      for _ in $(seq 1 20); do gpu_busy || break; sleep 0.5; done
     fi
+    if gpu_busy; then
+      dn="$(gpu_devnode)"
+      holders="$(fuser -v "$dn" 2>&1 | tail -n +2 | tr -s ' ' | paste -sd',' 2>/dev/null)"
+      log "ERROR: ${GPU_BUSID} (${dn:-?}) still has open handles after stopping known consumers — refusing ${TARGET_VM}. Holders: ${holders}"
+      echo "vm-passthrough hook: ${GPU_BUSID} still has open handles — something other than the AI models/coolercontrold is using it (e.g. an HPO job). Free it, then start ${TARGET_VM}." >&2
+      restore_gpu_consumers   # start was refused; put things back
+      exit 1
+    fi
+    log "prepare: ${GPU_BUSID} has zero open handles — safe to detach"
+    ;;
+
+  started/begin)
+    # VM is up and owns the GPU; its /dev/nvidiaN is gone. Bring fan control
+    # back (coolercontrold now sees only the remaining GPU + AMD + IPMI). The
+    # local-AI models are NOT restarted here — the GPU-1 model has no GPU.
+    log "started: restarting coolercontrold for the VM session"
+    systemctl start coolercontrold.service 2>/dev/null || log "WARN: could not start coolercontrold"
+    ;;
+
+  release/end)
+    # VM gone, GPU reattached to nvidia. Restore fans + the local-AI models
+    # (the latter only if AI mode is on).
+    log "release: VM stopped — restoring consumers"
+    restore_gpu_consumers
     ;;
 esac
 

@@ -77,6 +77,55 @@ modules:
         echo "Patched $karg_file:"
         cat "$karg_file"
 
+  # ─── Make the Nvidia 4090s COMPUTE-ONLY (no graphics DRM stack) ───────
+  # `nvidia-drm.modeset=0` above is necessary but NOT sufficient. The base
+  # still loads nvidia_drm + nvidia_modeset, which register the 4090s as DRM
+  # graphics devices (/dev/dri/cardN, /dev/nvidia-modeset). GNOME/Mutter and
+  # Electron apps then enumerate and hold those open via EGL/GLX/Vulkan — which
+  # (a) wastes the compute GPUs on the desktop and (b) makes runtime VFIO
+  # passthrough WEDGE THE KERNEL: the open handles block libvirt's managed
+  # detach ("NVRM: ... non-zero usage count"), forcing a reboot.
+  #
+  # Fix: keep the graphics modules unloaded so the desktop physically cannot
+  # touch the cards. CUDA needs only `nvidia` + `nvidia_uvm`, which still load.
+  #   1. modprobe.d blacklist + install-override — shipped via the files module
+  #      at /usr/lib/modprobe.d/nvidia-compute-only.conf (stops post-boot load;
+  #      this is the primary mechanism — nvidia_drm loads late, via udev).
+  #   2. trim nvidia_drm/nvidia_modeset from the base dracut force_drivers so the
+  #      initramfs doesn't force them back.
+  #   3. disable the Nvidia Vulkan ICD so Vulkan apps don't enumerate the cards
+  #      either (EGL/GLX are already dead once nvidia_modeset is gone).
+  #
+  # VERIFY after rebase: `lsmod | grep nvidia` shows NO nvidia_drm/nvidia_modeset,
+  # `ls -d /sys/bus/pci/devices/0000:02:00.0/drm/card*` is empty, and CUDA still
+  # runs (nvidia-smi + a CUDA job). If nvidia_drm still loads, the initramfs kept
+  # an old copy — regenerate it (rpm-ostree initramfs) as a follow-up.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+
+        # (1) shipped via the files module — assert it landed.
+        bl=/usr/lib/modprobe.d/nvidia-compute-only.conf
+        test -f "$bl" || { echo "ERROR: $bl not staged — files module didn't run or path changed"; exit 1; }
+
+        # (2) trim the graphics modules from the base's dracut force_drivers.
+        f=/usr/lib/dracut/dracut.conf.d/99-nvidia.conf
+        test -f "$f" || { echo "ERROR: $f missing — base Nvidia layout changed, recipe needs update"; exit 1; }
+        grep -q 'force_drivers' "$f" || { echo "ERROR: no force_drivers in $f"; cat "$f"; exit 1; }
+        grep -qE 'nvidia_drm|nvidia_modeset' "$f" || { echo "ERROR: $f no longer force-loads nvidia_drm/modeset — base changed, re-check this recipe"; cat "$f"; exit 1; }
+        sed -i 's/ nvidia_drm / /g; s/ nvidia_modeset / /g' "$f"
+        ! grep -qE 'nvidia_drm|nvidia_modeset' "$f" || { echo "ERROR: failed to trim nvidia_drm/modeset from $f"; cat "$f"; exit 1; }
+        grep -qw nvidia "$f" && grep -qw nvidia_uvm "$f" || { echo "ERROR: trim removed too much from $f"; cat "$f"; exit 1; }
+        echo "Trimmed dracut force_drivers -> $(cat "$f")"
+
+        # (3) disable the Nvidia Vulkan ICD (CUDA does not use Vulkan).
+        shopt -s nullglob
+        for icd in /usr/share/vulkan/icd.d/nvidia_icd*.json; do
+          mv "$icd" "${icd}.disabled"
+          echo "Disabled Vulkan ICD: $icd -> ${icd}.disabled"
+        done
+
   # ─── Third-party RPMs in a single dnf transaction ────────────────────
   # CS10 ships dnf4, not dnf5 — the BlueBuild `dnf` module will not work
   # on this base. Using the `script` module with `dnf install` instead.
