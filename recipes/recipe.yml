@@ -89,17 +89,15 @@ modules:
   # Fix: keep the graphics modules unloaded so the desktop physically cannot
   # touch the cards. CUDA needs only `nvidia` + `nvidia_uvm`, which still load.
   #   1. modprobe.d blacklist + install-override — shipped via the files module
-  #      at /usr/lib/modprobe.d/nvidia-compute-only.conf (stops post-boot load;
-  #      this is the primary mechanism — nvidia_drm loads late, via udev).
-  #   2. trim nvidia_drm/nvidia_modeset from the base dracut force_drivers so the
-  #      initramfs doesn't force them back.
+  #      at /usr/lib/modprobe.d/nvidia-compute-only.conf (stops post-boot load).
+  #   2. strip ALL nvidia modules from the base dracut force_drivers, then
+  #      regenerate the initramfs (last module) so they aren't force-loaded early.
   #   3. disable the Nvidia Vulkan ICD so Vulkan apps don't enumerate the cards
   #      either (EGL/GLX are already dead once nvidia_modeset is gone).
   #
-  # VERIFY after rebase: `lsmod | grep nvidia` shows NO nvidia_drm/nvidia_modeset,
-  # `ls -d /sys/bus/pci/devices/0000:02:00.0/drm/card*` is empty, and CUDA still
-  # runs (nvidia-smi + a CUDA job). If nvidia_drm still loads, the initramfs kept
-  # an old copy — regenerate it (rpm-ostree initramfs) as a follow-up.
+  # VERIFY after rebase: `lsmod | grep -E 'nvidia_drm|nvidia_modeset'` is empty,
+  # `ls /sys/bus/pci/devices/0000:02:00.0/drm/` is empty, and CUDA still runs
+  # (nvidia + nvidia_uvm load on demand; nvidia-smi shows both cards).
   - type: script
     snippets:
       - |
@@ -109,14 +107,22 @@ modules:
         bl=/usr/lib/modprobe.d/nvidia-compute-only.conf
         test -f "$bl" || { echo "ERROR: $bl not staged — files module didn't run or path changed"; exit 1; }
 
-        # (2) trim the graphics modules from the base's dracut force_drivers.
+        # (2) Strip ALL nvidia modules from the base's dracut force_drivers.
+        # The display is the AMD W7500, so nvidia is never needed in the ramdisk.
+        # Removing it (a) keeps nvidia_drm/nvidia_modeset out so the desktop can't
+        # grab the 4090s, and (b) shrinks the initramfs massively — the huge open
+        # nvidia.ko + GSP firmware drop out. That size cut is essential: /boot is
+        # only ~769 MB, and a regenerated (custom-checksum) initramfs needs its
+        # own /boot copy, so it must be small enough for two to coexist. CUDA is
+        # unaffected — nvidia + nvidia_uvm load post-boot via nvidia-modprobe when
+        # a GPU job starts.
         f=/usr/lib/dracut/dracut.conf.d/99-nvidia.conf
         test -f "$f" || { echo "ERROR: $f missing — base Nvidia layout changed, recipe needs update"; exit 1; }
         grep -q 'force_drivers' "$f" || { echo "ERROR: no force_drivers in $f"; cat "$f"; exit 1; }
-        grep -qE 'nvidia_drm|nvidia_modeset' "$f" || { echo "ERROR: $f no longer force-loads nvidia_drm/modeset — base changed, re-check this recipe"; cat "$f"; exit 1; }
-        sed -i 's/ nvidia_drm / /g; s/ nvidia_modeset / /g' "$f"
-        ! grep -qE 'nvidia_drm|nvidia_modeset' "$f" || { echo "ERROR: failed to trim nvidia_drm/modeset from $f"; cat "$f"; exit 1; }
-        grep -qw nvidia "$f" && grep -qw nvidia_uvm "$f" || { echo "ERROR: trim removed too much from $f"; cat "$f"; exit 1; }
+        grep -qE '\bnvidia' "$f" || { echo "ERROR: $f no longer force-loads any nvidia module — base changed, re-check this recipe"; cat "$f"; exit 1; }
+        sed -i -E 's/\bnvidia(_[a-z]+)?\b//g; s/  +/ /g' "$f"
+        ! grep -qE '\bnvidia' "$f" || { echo "ERROR: failed to strip nvidia from $f"; cat "$f"; exit 1; }
+        grep -qw i915 "$f" && grep -qw amdgpu "$f" || { echo "ERROR: trim removed too much (i915/amdgpu gone) from $f"; cat "$f"; exit 1; }
         echo "Trimmed dracut force_drivers -> $(cat "$f")"
 
         # (3) disable the Nvidia Vulkan ICD (CUDA does not use Vulkan).
@@ -450,12 +456,12 @@ modules:
   # ─── Regenerate the initramfs (bake compute-only into the ramdisk) ───
   # MUST be last (before signing) so it captures every prior change.
   #
-  # The compute-only module trims nvidia_drm/nvidia_modeset from the dracut
-  # force_drivers and blacklists them — but the BASE image's prebuilt initramfs
-  # still force-loads them, so on first boot they come up BEFORE the real-root
-  # modprobe.d blacklist can take effect (confirmed at runtime: `lsmod` showed
-  # nvidia_drm/nvidia_modeset loaded and gnome-shell holding /dev/nvidia-modeset).
-  # The only fix is to rebuild the ramdisk so the trim + blacklist are baked in.
+  # The compute-only module strips ALL nvidia modules from the dracut
+  # force_drivers and blacklists nvidia_drm/nvidia_modeset — but the BASE image's
+  # prebuilt initramfs still force-loads them, so on first boot they come up
+  # BEFORE the real-root modprobe.d blacklist can take effect (confirmed: `lsmod`
+  # showed them loaded, gnome-shell holding /dev/nvidia-modeset). The only fix is
+  # to rebuild the ramdisk so the strip is baked in.
   #
   # This MUST happen at build time:
   #   - Bluefin sets LockLayering=true, so client `rpm-ostree initramfs --enable`
@@ -464,10 +470,13 @@ modules:
   #     is `OS_VERSION <= 40`; VERSION_ID here is 10).
   # So we run dracut directly with the SAME incantation that module uses
   # (--add ostree --no-hostonly --reproducible), plus an explicit --omit-drivers
-  # and a build-time assertion for certainty.
+  # and build-time asserts.
   #
-  # CUDA is untouched: `nvidia` + `nvidia_uvm` stay force-loaded; only the
-  # graphics DRM/modeset pair is removed.
+  # /boot is tiny (~769 MB) and a custom-checksum initramfs can't share /boot
+  # with the base, so it must be SMALL — that's why all nvidia (the giant
+  # nvidia.ko + GSP firmware) is omitted, not just drm/modeset. The build prints
+  # the resulting size; it needs to be well under ~370 MB so two can coexist in
+  # /boot during a rebase. CUDA is untouched (nvidia + nvidia_uvm load post-boot).
   - type: script
     snippets:
       - |
@@ -482,19 +491,24 @@ modules:
         echo "Regenerating initramfs for kernel ${kver} -> ${img}"
 
         # Same flags as BlueBuild's initramfs module (ostree boot module is
-        # REQUIRED or the system won't boot), plus an explicit omit of the
-        # graphics modules.
+        # REQUIRED or the system won't boot); omit ALL nvidia modules ('nvidia'
+        # as a substring pattern matches nvidia, nvidia_drm, nvidia_modeset,
+        # nvidia_uvm, nvidia_peermem).
         dracut --kver "$kver" --force --add 'ostree' --no-hostonly --reproducible \
-          --omit-drivers 'nvidia_drm nvidia_modeset' "$img"
+          --omit-drivers 'nvidia' "$img"
         chmod 0600 "$img"
 
-        # Fail the build loudly if the graphics modules slipped back in.
+        # Report the size — this is the number that has to fit in /boot.
+        echo "Regenerated initramfs size: $(du -h "$img" | cut -f1)"
+
+        # Fail the build loudly if any nvidia kernel module slipped back in.
         if command -v lsinitrd >/dev/null 2>&1; then
-          if lsinitrd "$img" 2>/dev/null | grep -Eiq 'nvidia_(drm|modeset)'; then
-            echo "ERROR: nvidia_drm/nvidia_modeset still present in regenerated initramfs"
+          if lsinitrd "$img" 2>/dev/null | grep -Eiq 'nvidia[a-z_]*\.ko'; then
+            echo "ERROR: an nvidia module is still present in the regenerated initramfs:"
+            lsinitrd "$img" 2>/dev/null | grep -Ei 'nvidia[a-z_]*\.ko'
             exit 1
           fi
-          echo "Verified: nvidia_drm/nvidia_modeset absent from regenerated initramfs"
+          echo "Verified: no nvidia kernel modules in the regenerated initramfs"
         fi
 
   # ─── Image signing (cosign) ──────────────────────────────────────────
