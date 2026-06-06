@@ -71,9 +71,13 @@ stop_gpu_consumers() {
 }
 
 # Restore consumers: fans always; local-AI only if AI mode is on (respects the
-# HPO-mode gate). Used on the refuse path and on VM teardown.
+# HPO-mode gate). Used on the refuse path and on VM teardown. coolercontrold is
+# RESTARTED, not just started: on teardown it is ALREADY running (from
+# started/begin) but its NVML session predates GPU1's reattach, so only a restart
+# makes it re-enumerate the returned card. On the refuse path it's stopped, so
+# restart simply starts it.
 restore_gpu_consumers() {
-  systemctl start coolercontrold.service 2>/dev/null || log "WARN: could not start coolercontrold"
+  systemctl restart coolercontrold.service 2>/dev/null || log "WARN: could not restart coolercontrold"
   if [ -n "$AI_FLAG" ] && [ -f "$AI_FLAG" ]; then
     user_systemctl start local-ai.target 2>/dev/null || log "WARN: could not start local-ai.target"
   fi
