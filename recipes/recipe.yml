@@ -453,6 +453,30 @@ modules:
         test -x "$hook"
         echo "qemu hook present and executable: $hook"
 
+  # ─── swtpm (vTPM 2.0) SELinux + /var fixups for ostree ───────────────
+  # Win11 VMs need an emulated TPM 2.0 (swtpm). Two things break on this
+  # bootc/ostree base, both because RPM-owned /var content is dropped:
+  #   1. swtpm_setup can't create /var/lib/swtpm-localca (the EK-cert local CA
+  #      state dir) and can't write its log under /var/log/swtpm. Those dirs are
+  #      recreated at boot by files/.../tmpfiles.d/bluefin-gdx-swtpm.conf.
+  #   2. With the log dir recreated, the per-VM log is labeled virt_log_t, which
+  #      the policy in this base does NOT let swtpm_t write — so swtpm dies on
+  #      launch with the misleading "swtpm ... does not support TPM 2".
+  # The .cil (shipped by the files module) restores that one allow. We load it
+  # with `semodule -X 300 -i` — the bootc-supported way to bake a policy module
+  # into the image so it persists on the deployed system (per the SELinux
+  # maintainer; priority 300 leaves the default 400 free for local overrides).
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+        cil=/usr/share/selinux/packages/bluefin-gdx-swtpm.cil
+        test -f "$cil" || { echo "ERROR: $cil not staged — files module didn't run or path changed"; exit 1; }
+        semodule -X 300 -i "$cil"
+        semodule -lfull | grep -q 'bluefin-gdx-swtpm' \
+          || { echo "ERROR: swtpm SELinux module did not load"; exit 1; }
+        echo "Loaded SELinux module bluefin-gdx-swtpm (swtpm_t -> virt_log_t log write)"
+
   # ─── Regenerate the initramfs (bake compute-only into the ramdisk) ───
   # MUST be last (before signing) so it captures every prior change.
   #

@@ -1,0 +1,14 @@
+; bluefin-gdx-swtpm.cil — let swtpm write its per-VM log.
+;
+; On a normal RPM install the swtpm-tools package ships /var/log/swtpm and the
+; swtpm domain can write the per-VM TPM log there. On this bootc/ostree image
+; that path is recreated at runtime (see tmpfiles.d/bluefin-gdx-swtpm.conf) and
+; ends up labeled virt_log_t — which swtpm_t is NOT granted write on by the
+; policy shipped in this base. The result is swtpm_setup dying on launch with the
+; misleading "swtpm at /usr/bin/swtpm does not support TPM 2" (it's really
+; "couldn't open my log file"), which fails every TPM-2.0 VM start.
+;
+; This restores the one missing allow. Loaded at build time with
+; `semodule -X 300 -i` (see the recipe), the bootc-supported way to ship a
+; policy module so it persists on the deployed system.
+(allow swtpm_t virt_log_t (file (getattr open read append write ioctl)))
