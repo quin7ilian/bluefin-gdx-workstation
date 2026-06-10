@@ -1,0 +1,19 @@
+# Raise the priority of the kernel IPMI (KCS) polling thread so the HPO/ML
+# workload can't starve it — see /usr/libexec/bmc-ipmi-priority.sh for the
+# full rationale. Pairs with the Nice= drop-in on cc-plugin-custom-device
+# (the userspace ipmitool side).
+[Unit]
+Description=Raise priority of the kernel IPMI (KCS) polling thread
+Documentation=file:///usr/libexec/bmc-ipmi-priority.sh
+# kipmi0 is created when ipmi_si binds the KCS interface, which happens inside
+# the modprobe run by systemd-modules-load.service (modules-load.d/ipmi.conf).
+After=systemd-modules-load.service
+ConditionPathExists=/dev/ipmi0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/bmc-ipmi-priority.sh
+
+[Install]
+WantedBy=multi-user.target

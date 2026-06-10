@@ -305,6 +305,28 @@ modules:
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
 
+  # ─── BMC IPMI priority helper: assert staged + executable ────────────
+  # bmc-ipmi-priority.service ExecStart's this helper; like the libvirt qemu
+  # hook and the DAC nudge, it silently no-ops if it isn't +x. The files
+  # module preserves the repo's 0755, but chmod + assert here so a dropped
+  # exec bit (or a moved path / missing drop-in) breaks the build loudly
+  # instead of shipping a fan-control fix that never runs. Must come AFTER the
+  # files module and BEFORE the systemd enable below (which needs the unit).
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+        helper=/usr/libexec/bmc-ipmi-priority.sh
+        test -f "$helper" || { echo "ERROR: $helper not staged — files module didn't run or path changed"; exit 1; }
+        chmod 0755 "$helper"
+        test -x "$helper"
+        for f in \
+          /usr/lib/systemd/system/bmc-ipmi-priority.service \
+          /usr/lib/systemd/system/cc-plugin-custom-device.service.d/10-ipmi-priority.conf; do
+          test -f "$f" || { echo "ERROR: $f not staged — files module didn't run or path changed"; exit 1; }
+        done
+        echo "BMC IPMI priority helper staged and executable; unit + plugin drop-in present."
+
   # ─── Enable build-time services ──────────────────────────────────────
   # - coolercontrold.service: COPR ships the unit but doesn't preset-
   #   enable it, so without this the web UI on :11987 is not reachable
@@ -321,12 +343,20 @@ modules:
   #   BindsTo=coolercontrold.service + WantedBy=coolercontrold.service:
   #   pulled in whenever cc starts, stops when cc stops — no need to
   #   modify the upstream coolercontrold.service file.
+  # - bmc-ipmi-priority.service: boot oneshot that renices the kernel
+  #   kipmi0 KCS-polling thread from nice 19 to -10. /dev/ipmi0 is a POLLED
+  #   interface (irq 0), so that thread drives every IPMI transaction in
+  #   software; at nice 19 it starves under the HPO/ML load and CoolerControl's
+  #   fan-duty writes time out ("waiting to set fixed duty"). Unit + helper
+  #   ship via the files module; paired with the Nice= drop-in on
+  #   cc-plugin-custom-device (the userspace ipmitool side).
   - type: systemd
     system:
       enabled:
         - coolercontrold.service
         - amdgpu-pin-mclk.service
         - coolercontrol-bmc-bridge.service
+        - bmc-ipmi-priority.service
         - tailscaled.service
 
   # ─── Profiling tools (kernel-coupled, must match running kernel) ─────

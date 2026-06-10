@@ -15,6 +15,13 @@
 
 set -euo pipefail
 
+# Take the shared BMC mutex (cc-set-fan-duty.sh / cc-bmc-sensor.sh use the
+# same lock). Nothing else touches the BMC this early — coolercontrold and its
+# plugin start AFTER us (Before=coolercontrold.service) — but holding it keeps
+# the seed write below atomic w.r.t. that path and future-proofs the ordering.
+exec 200>/run/cc-bmc-ipmi.lock
+flock -x 200
+
 # Read current duty register
 current=$(ipmitool raw 0x3a 0xda)
 read -ra bytes <<< "$current"
@@ -49,3 +56,10 @@ ipmitool raw 0x3a 0xd6 "${write_args[@]}" >/dev/null
 ipmitool raw 0x3a 0xd8 \
     0x01 0x01 0x01 0x01 0x01 0x01 0x01 \
     0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 >/dev/null
+
+# Seed the duty shadow with exactly what we just wrote, so the first
+# cc-set-fan-duty.sh after boot modifies the shadow instead of paying a live
+# `0x3a 0xda` read. The sanitised bytes[] here equal the manual register's
+# contents, which (FAN1-7 now in manual mode) the BMC holds steady.
+printf '%s\n' "${bytes[*]}" > /run/cc-bmc-duty.state.tmp \
+    && mv /run/cc-bmc-duty.state.tmp /run/cc-bmc-duty.state
