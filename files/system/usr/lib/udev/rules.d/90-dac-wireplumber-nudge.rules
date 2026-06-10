@@ -1,0 +1,17 @@
+# Auto-recover the Schiit Multibit (C-Media CM6631A, 0d8c:0004) after a KVM
+# switch. On switch-back the DAC re-enumerates through the KVM's USB hub amid a
+# burst of -71 errors; the kernel usually gets the ALSA card up, but WirePlumber
+# sees the device appear mid-storm, fails to create a node, and never retries —
+# leaving no sink ("no audio device"). Restarting WirePlumber makes it re-probe
+# and the sink appears (verified live).
+#
+# When the DAC's ALSA *control* device appears (one per card — a single, stable
+# trigger, unlike the per-PCM/per-interface events), tag it for systemd and pull
+# in the oneshot dac-wireplumber-nudge.service, which debounces the storm and
+# re-probes WirePlumber for the active user.
+#
+# Why TAG+="systemd" + SYSTEMD_WANTS rather than RUN+="systemd-run …": letting
+# udevd (udev_t) launch systemd-run / talk to the user bus directly invites
+# SELinux denials on this CS10 base; routing through a systemd-owned unit is the
+# blessed udev→systemd path and keeps the long-running work off the udev worker.
+ACTION=="add", SUBSYSTEM=="sound", KERNEL=="controlC*", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="0004", TAG+="systemd", ENV{SYSTEMD_WANTS}+="dac-wireplumber-nudge.service"

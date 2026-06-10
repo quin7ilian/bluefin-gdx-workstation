@@ -1,0 +1,16 @@
+# Pulled in by 90-dac-wireplumber-nudge.rules when the Schiit Multibit's ALSA
+# control device appears (e.g. after a KVM switch-back). Debounces the
+# re-enumeration storm, then restarts WirePlumber for the active user so the DAC
+# gets a node + sink. Not enabled statically — started on demand via the udev
+# rule's SYSTEMD_WANTS, so repeated triggers coalesce onto this one unit.
+[Unit]
+Description=Re-probe WirePlumber for a re-enumerated USB DAC (Schiit Multibit)
+# Only meaningful with a graphical/user session present.
+After=systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/dac-wireplumber-nudge.sh
+# The helper sleeps a few seconds to let the storm settle; bound it so a wedged
+# run can't linger.
+TimeoutStartSec=30

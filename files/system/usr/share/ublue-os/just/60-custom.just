@@ -485,3 +485,42 @@ setup-vm-host gpu_index="1":
     echo "     sudo virsh nodedev-detach $nodedev   # expect: detached"
     echo "     sudo virsh nodedev-reattach $nodedev # restore to nvidia"
     echo "     systemctl --user start $GPU_SERVICE"
+
+# ─── USB DAC (Schiit Multibit) reconnect ─────────────────────────────
+# Manual recovery when the DAC shows no sink after a KVM switch. The Schiit
+# Multibit (C-Media CM6631A) re-enumerates messily through the KVM's USB hub on
+# switch-back: the kernel usually gets the ALSA card, but WirePlumber fails to
+# create a node and never retries, so you get "no audio device". This re-probes
+# WirePlumber (and, if the card didn't even enumerate, resets the DAC's USB port
+# first). Bind it to a GNOME keyboard shortcut for one-tap recovery.
+#
+# The 90-dac-wireplumber-nudge udev rule already does this automatically on
+# reconnect; this is the manual fallback for when the automatic nudge doesn't
+# land (e.g. it fired mid-storm before the card stabilised).
+reconnect-dac:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VID=0d8c PID=0004
+
+    # The DAC's USB sysfs node by VID:PID, if it's on the bus at all.
+    dac=""
+    for d in /sys/bus/usb/devices/*/; do
+        [ "$(cat "$d/idVendor" 2>/dev/null)" = "$VID" ] || continue
+        [ "$(cat "$d/idProduct" 2>/dev/null)" = "$PID" ] || continue
+        dac="$(basename "$d")"; break
+    done
+
+    if grep -qix "${VID}:${PID}" /proc/asound/card*/usbid 2>/dev/null; then
+        echo "DAC has an ALSA card — re-probing WirePlumber only."
+    elif [ -n "$dac" ]; then
+        echo "DAC on the bus ($dac) but no ALSA card — resetting its USB port..."
+        echo 0 | sudo tee "/sys/bus/usb/devices/$dac/authorized" >/dev/null
+        echo 1 | sudo tee "/sys/bus/usb/devices/$dac/authorized" >/dev/null
+        sleep 3
+    else
+        echo "DAC not on the USB bus — switch the KVM back to this PC, then re-run."
+        exit 1
+    fi
+
+    systemctl --user restart wireplumber
+    echo "WirePlumber re-probed. Verify with:  wpctl status | grep -i multibit"

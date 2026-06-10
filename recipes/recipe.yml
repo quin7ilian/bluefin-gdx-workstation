@@ -477,6 +477,40 @@ modules:
           || { echo "ERROR: swtpm SELinux module did not load"; exit 1; }
         echo "Loaded SELinux module bluefin-gdx-swtpm (swtpm_t -> virt_log_t log write)"
 
+  # ─── USB DAC (Schiit Multibit) reconnect helpers ─────────────────────
+  # The Schiit Jotunheim Multibit (C-Media CM6631A, 0d8c:0004) reaches this host
+  # through the USB3 KVM switch's hub and re-enumerates badly on switch-back: the
+  # kernel usually gets the ALSA card, but WirePlumber fails to create a node and
+  # never retries, leaving no audio sink. The fix ships entirely via the files
+  # module:
+  #   - usr/lib/bootc/kargs.d/20-usb-dac-quirk.toml          — usbcore.quirks to
+  #     calm the enumeration storm (a NEW karg; bootc aggregates kargs.d).
+  #   - usr/lib/udev/rules.d/90-dac-wireplumber-nudge.rules + the
+  #     usr/lib/systemd/system/dac-wireplumber-nudge.service it pulls in via
+  #     SYSTEMD_WANTS                                         — auto re-probe
+  #     WirePlumber on reconnect.
+  #   - the `ujust reconnect-dac` recipe in 60-custom.just    — manual fallback.
+  #
+  # The udev-pulled helper runs from the service's ExecStart, which silently does
+  # nothing if the script isn't +x — so chmod + assert here (same reasoning as
+  # the libvirt qemu hook). Also assert the rule/unit/karg landed so a moved path
+  # breaks the build loudly instead of shipping a dead fix.
+  - type: script
+    snippets:
+      - |
+        set -euo pipefail
+        helper=/usr/libexec/dac-wireplumber-nudge.sh
+        test -f "$helper" || { echo "ERROR: $helper not staged — files module didn't run or path changed"; exit 1; }
+        chmod 0755 "$helper"
+        test -x "$helper"
+        for f in \
+          /usr/lib/udev/rules.d/90-dac-wireplumber-nudge.rules \
+          /usr/lib/systemd/system/dac-wireplumber-nudge.service \
+          /usr/lib/bootc/kargs.d/20-usb-dac-quirk.toml; do
+          test -f "$f" || { echo "ERROR: $f not staged — files module didn't run or path changed"; exit 1; }
+        done
+        echo "USB DAC reconnect helpers staged; $helper is executable."
+
   # ─── Regenerate the initramfs (bake compute-only into the ramdisk) ───
   # MUST be last (before signing) so it captures every prior change.
   #

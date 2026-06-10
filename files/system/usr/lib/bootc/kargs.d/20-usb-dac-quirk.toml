@@ -1,0 +1,34 @@
+# Schiit Jotunheim Multibit (C-Media CM6631A, 0d8c:0004) USB enumeration quirk.
+#
+# The DAC reaches this host through a USB3 KVM switch's hub. On every KVM
+# switch-back it electrically re-attaches and the CM6631A botches the handshake:
+# the journal fills with `can't set config #1, error -71` (EPROTO),
+# `device not accepting address`, `Cannot enable. Maybe the USB cable is bad?`,
+# retried many times before it (sometimes) comes up. Confirmed in this box's
+# journal; cables already ruled out and the hub can't be removed (it's the KVM).
+#
+# These USB-core quirks make the host tolerate the chip's slow, finicky
+# re-attach. Matched by VID:PID, so ONLY this device is affected:
+#   g = USB_QUIRK_DELAY_INIT      — pause after the device-descriptor read so the
+#       chip's clock/PHY settles before enumeration continues.
+#   k = USB_QUIRK_NO_LPM          — skip USB Link Power Management negotiation, a
+#       frequent trigger of -71 / spurious disconnects on cheap audio PHYs.
+#   n = USB_QUIRK_DELAY_CTRL_MSG  — delay before every control transfer; the DAC
+#       also fails the UAC clock GET/SET control requests (`cannot set freq …
+#       err -71`), and spacing them out helps.
+# (Flag letters verified against drivers/usb/core/quirks.c.)
+#
+# usbcore is BUILT-IN on this kernel (`modinfo usbcore` => builtin), so a
+# modprobe.d `options usbcore quirks=` would be ignored — the kernel cmdline is
+# the only reliable vehicle. This is a NEW karg in its own kargs.d file, which
+# bootc aggregates (same proven pattern as 10-vm-windows.toml; contrast the
+# nvidia-drm.modeset override in recipe.yml, which had to edit the base file in
+# place because cross-file karg *override* is undefined — this is an add, not an
+# override, so a drop-in is correct).
+#
+# Scope/limit: a VID:PID quirk is only applied AFTER the device descriptor is
+# read, so it helps the SET_CONFIG and clock-control failures but cannot help
+# the pre-descriptor SET_ADDRESS / port-enable failures. It is a storm-reducer,
+# not a guaranteed cure — the WirePlumber re-probe (udev rule + `ujust
+# reconnect-dac`) is the part that actually restores the audio sink.
+kargs = ["usbcore.quirks=0d8c:0004:gkn"]
