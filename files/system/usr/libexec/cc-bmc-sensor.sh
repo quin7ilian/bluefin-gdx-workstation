@@ -35,12 +35,13 @@ fi
 sensor="$1"
 mode="$2"
 cache="/run/cc-bmc-sensors.cache"
-# Shared BMC mutex — the SAME lock cc-set-fan-duty.sh takes for duty writes.
-# Both this `ipmitool sensor list` and a duty write hit the one KCS interface;
-# serialising them on one lock stops a refresh from interleaving with a write
-# on the bus (which caused KCS retries/timeouts). We take it non-blocking
-# below: if a write holds it, we skip the refresh and serve the existing cache.
-lockfile="/run/cc-bmc-ipmi.lock"
+# Own lock for the sensor refresh — deliberately NOT shared with the duty
+# writers. This `ipmitool sensor list` takes ~2-3s on this polled-KCS BMC;
+# sharing a lock with cc-set-fan-duty.sh made duty writes block on the whole
+# list and time out. KCS bus access between the two openers is already
+# serialised by the kernel IPMI message handler. This lock only stops two
+# refreshes from overlapping (taken non-blocking below).
+lockfile="/run/cc-bmc-sensor.lock"
 ttl=5
 
 cache_age() {
@@ -51,9 +52,9 @@ cache_age() {
     fi
 }
 
-# Refresh cache if stale (with non-blocking lock; if someone else is
-# already refreshing OR a duty write holds the shared BMC lock, we skip and
-# read what's there — possibly a few hundred ms stale, fine for fan curves).
+# Refresh cache if stale (with non-blocking lock; if another refresh is
+# already in progress we skip and read what's there — possibly a few hundred
+# ms stale, which is fine for fan curves).
 if [ "$(cache_age)" -gt "$ttl" ]; then
     {
         if flock -n -x 100; then

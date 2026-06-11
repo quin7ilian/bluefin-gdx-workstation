@@ -29,13 +29,19 @@
 # can sensibly request 0%, design the curve to express "off" intent
 # above the wrapper layer.
 #
-# Concurrency: a single shared BMC mutex (/run/cc-bmc-ipmi.lock) serialises
-# this writer against (a) other concurrent duty writes and (b) the sensor
-# cache refresh in cc-bmc-sensor.sh. All three touch the one KCS interface;
-# without a shared lock a duty write could interleave with an in-flight
-# `ipmitool sensor list` on the bus, causing KCS retries/timeouts. We block
-# (-x) because a duty write must complete; the sensor refresh takes the same
-# lock non-blocking and simply serves slightly-stale cache while we hold it.
+# Concurrency: /run/cc-bmc-fan.lock serialises concurrent DUTY WRITERS only —
+# multiple set_duty invocations (CoolerControl updates channels in parallel)
+# plus the bridge's startup/shutdown register writes — so their shadow
+# read-modify-writes can't interleave and clobber each other.
+#
+# We deliberately do NOT share a lock with the sensor refresh
+# (cc-bmc-sensor.sh, /run/cc-bmc-sensor.lock). `ipmitool sensor list` takes
+# ~2-3s on this polled-KCS BMC (far longer than first assumed); blocking a
+# duty write behind that lock made set_duty wait out the whole list and time
+# out during the post-boot thermal transient. The kernel IPMI message handler
+# already serialises the actual KCS messages between the two openers, so a
+# single duty write interleaves between the sensor reads instead of waiting
+# for all of them. Keep these two locks separate.
 #
 # Idx → physical mapping (verified empirically 2026-05-28):
 #   1 = CPU_FAN1
@@ -76,8 +82,8 @@ is_valid_register() {
     return 0
 }
 
-# Serialize all BMC access (duty writes + sensor refresh) on one shared lock.
-exec 200>/run/cc-bmc-ipmi.lock
+# Serialize concurrent duty writers (set_duty + bridge) for shadow integrity.
+exec 200>/run/cc-bmc-fan.lock
 flock -x 200
 
 # Source the current 16-byte array from the shadow; fall back to a live BMC

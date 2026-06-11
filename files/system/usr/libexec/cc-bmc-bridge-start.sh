@@ -15,11 +15,11 @@
 
 set -euo pipefail
 
-# Take the shared BMC mutex (cc-set-fan-duty.sh / cc-bmc-sensor.sh use the
-# same lock). Nothing else touches the BMC this early — coolercontrold and its
-# plugin start AFTER us (Before=coolercontrold.service) — but holding it keeps
-# the seed write below atomic w.r.t. that path and future-proofs the ordering.
-exec 200>/run/cc-bmc-ipmi.lock
+# Take the duty-writer lock (shared with cc-set-fan-duty.sh) so the register
+# write + shadow seed below can't interleave with a duty write. Nothing else
+# touches the BMC this early — coolercontrold and its plugin start AFTER us
+# (Before=coolercontrold.service) — but this keeps the invariant clean.
+exec 200>/run/cc-bmc-fan.lock
 flock -x 200
 
 # Read current duty register

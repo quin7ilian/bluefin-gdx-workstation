@@ -9,14 +9,14 @@
 
 set -euo pipefail
 
-# Take the shared BMC mutex so this mode-flip can't interleave with an
-# in-flight duty write or sensor read on the KCS bus. Under the normal stop
-# order (coolercontrold -> plugin -> this ExecStop) nothing else is touching
-# the BMC, but a manual `systemctl stop coolercontrol-bmc-bridge.service` or
-# odd ordering could. Bounded wait + proceed: reverting the fans to the BMC
-# auto-curve is a safety action that MUST run, so we never block shutdown on
-# the lock indefinitely — if it's still held after 5s we go ahead unlocked.
-exec 200>/run/cc-bmc-ipmi.lock
+# Take the duty-writer lock (shared with cc-set-fan-duty.sh) so this mode-flip
+# can't interleave with an in-flight duty write. Under the normal stop order
+# (coolercontrold -> plugin -> this ExecStop) nothing else is writing, but a
+# manual `systemctl stop coolercontrol-bmc-bridge.service` or odd ordering
+# could. Bounded wait + proceed: reverting the fans to the BMC auto-curve is a
+# safety action that MUST run, so we never block shutdown on the lock
+# indefinitely — if it's still held after 5s we go ahead unlocked.
+exec 200>/run/cc-bmc-fan.lock
 flock -x -w 5 200 || echo "cc-bmc-bridge-stop: lock busy after 5s, proceeding (failsafe mode-flip must run)" >&2
 
 ipmitool raw 0x3a 0xd8 \
