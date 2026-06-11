@@ -1,0 +1,12 @@
+# One tick of the USB DAC enumeration watchdog. Triggered by
+# dac-autorecover.timer (~every 20s). Runs as root so it can re-drive the hub
+# (write /sys/bus/usb/drivers/usb/{unbind,bind}) and read the kernel journal.
+# Almost always a no-op — see /usr/libexec/dac-autorecover.sh for the guards.
+[Unit]
+Description=USB DAC enumeration watchdog (re-drive the KVM hub if the DAC is failing)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/libexec/dac-autorecover.sh
+# Bounded: the script's only blocking step is a 2s sleep between unbind/bind.
+TimeoutStartSec=30

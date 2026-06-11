@@ -1,0 +1,16 @@
+# Drives the USB DAC enumeration watchdog. Fires shortly after boot and then
+# every ~20s, so a DAC turned on AFTER boot (or after a KVM switch-back) that
+# fails to enumerate is detected and recovered within a tick — without any
+# manual `ujust reconnect-dac`. The tick is a cheap sysfs check that exits
+# immediately unless the DAC is actively failing (see dac-autorecover.sh).
+# Enabled via the recipe's systemd module.
+[Unit]
+Description=Periodic USB DAC enumeration watchdog
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=20s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

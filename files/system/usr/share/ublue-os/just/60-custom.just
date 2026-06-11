@@ -487,17 +487,24 @@ setup-vm-host gpu_index="1":
     echo "     systemctl --user start $GPU_SERVICE"
 
 # ─── USB DAC (Schiit Multibit) reconnect ─────────────────────────────
-# Manual recovery when the DAC shows no sink after a KVM switch. The Schiit
-# Multibit (C-Media CM6631A) re-enumerates messily through the KVM's USB hub on
-# switch-back: the kernel usually gets the ALSA card, but WirePlumber fails to
-# create a node and never retries, so you get "no audio device". This re-probes
-# WirePlumber (and, if the card didn't even enumerate, resets the DAC's USB port
-# first). Bind it to a GNOME keyboard shortcut for one-tap recovery.
+# Recover the DAC when it has no sink after a KVM switch or at boot. Three
+# failure modes, handled in escalating order:
+#   1. Enumerated but no sink — WirePlumber missed it during the messy re-attach.
+#      Fix: restart WirePlumber. (The 90-dac-wireplumber-nudge udev rule does
+#      this automatically on reconnect; this is the manual equivalent.)
+#   2. Enumerated but no ALSA card — reset the device's USB port (authorized
+#      toggle), then re-probe.
+#   3. Not enumerated AT ALL — the pre-descriptor failure (`device descriptor
+#      read … error -32` through the KVM's Genesys hub). The host never learns
+#      it's a DAC, so the usbcore.quirks karg can't help and a port-disable
+#      toggle isn't enough (it doesn't cut VBUS). What works (verified on this
+#      box) is unbind/rebind of the whole hub the DAC sits on, which forces a
+#      fresh enumeration of its port. Peripherals on that hub blink briefly.
 #
-# The 90-dac-wireplumber-nudge udev rule already does this automatically on
-# reconnect; this is the manual fallback for when the automatic nudge doesn't
-# land (e.g. it fired mid-storm before the card stabilised).
-reconnect-dac:
+# Bind this to a GNOME keyboard shortcut for one-tap recovery. Pass hub=3-1
+# (find it with `lsusb -t`) to force which hub is re-driven if auto-detect is
+# ever wrong.
+reconnect-dac hub="":
     #!/usr/bin/env bash
     set -euo pipefail
     VID=0d8c PID=0004
@@ -511,16 +518,50 @@ reconnect-dac:
     done
 
     if grep -qix "${VID}:${PID}" /proc/asound/card*/usbid 2>/dev/null; then
-        echo "DAC has an ALSA card — re-probing WirePlumber only."
+        echo "DAC present with an ALSA card — re-probing WirePlumber only."
     elif [ -n "$dac" ]; then
         echo "DAC on the bus ($dac) but no ALSA card — resetting its USB port..."
         echo 0 | sudo tee "/sys/bus/usb/devices/$dac/authorized" >/dev/null
         echo 1 | sudo tee "/sys/bus/usb/devices/$dac/authorized" >/dev/null
         sleep 3
     else
-        echo "DAC not on the USB bus — switch the KVM back to this PC, then re-run."
-        exit 1
+        # Mode 3: re-drive the hub the DAC lives on to force re-enumeration.
+        kvmhub="{{hub}}"
+        if [ -z "$kvmhub" ]; then
+            # Auto-detect: the KVM hub is the top-level external hub (a
+            # <bus>-<port> node, not a usbN root hub) with the most downstream
+            # devices — the KVM aggregates the switched peripherals (keyboard,
+            # DAC, Yubikey…), unlike a motherboard-internal hub.
+            bestn=-1
+            for d in /sys/bus/usb/devices/*/; do
+                n="$(basename "$d")"
+                [[ "$n" =~ ^[0-9]+-[0-9]+$ ]] || continue
+                [ "$(cat "$d/bDeviceClass" 2>/dev/null)" = "09" ] || continue
+                c="$(ls -d /sys/bus/usb/devices/"${n}".* 2>/dev/null | wc -l)"
+                if [ "$c" -gt "$bestn" ]; then bestn="$c"; kvmhub="$n"; fi
+            done
+        fi
+        if [ -z "${kvmhub:-}" ] || [ ! -e "/sys/bus/usb/devices/$kvmhub" ]; then
+            echo "Couldn't find a hub to re-drive — is the KVM switched to this PC?"
+            echo "If so:  lsusb -t  to find the DAC's hub, then:  ujust reconnect-dac hub=3-1"
+            exit 1
+        fi
+        echo "DAC not enumerated — re-driving its USB hub ($kvmhub) to force re-enumeration."
+        echo "  (Keyboard / mouse / Yubikey on that hub will blink for a few seconds.)"
+        echo "$kvmhub" | sudo tee /sys/bus/usb/drivers/usb/unbind >/dev/null
+        sleep 2
+        echo "$kvmhub" | sudo tee /sys/bus/usb/drivers/usb/bind   >/dev/null
+        sleep 5
+        if grep -qix "${VID}:${PID}" /proc/asound/card*/usbid 2>/dev/null || lsusb 2>/dev/null | grep -qi "${VID}:${PID}"; then
+            echo "DAC re-enumerated."
+        else
+            echo ">>> DAC STILL ABSENT after the hub rebind."
+            echo "    This is the hard pre-descriptor failure; the reliable cure is a"
+            echo "    VBUS power-cycle — a physical USB replug, or a powered hub between"
+            echo "    the KVM and the DAC."
+            exit 1
+        fi
     fi
 
     systemctl --user restart wireplumber
-    echo "WirePlumber re-probed. Verify with:  wpctl status | grep -i multibit"
+    echo "WirePlumber re-probed. Verify:  wpctl status | grep -iE 'cm6631|multibit'"
