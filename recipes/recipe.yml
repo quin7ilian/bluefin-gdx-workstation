@@ -505,6 +505,23 @@ modules:
         set -euo pipefail
         cil=/usr/share/selinux/packages/bluefin-gdx-swtpm.cil
         test -f "$cil" || { echo "ERROR: $cil not staged — files module didn't run or path changed"; exit 1; }
+
+        # Re-home the SELinux store onto THIS build layer's writable upper dir
+        # before semodule runs. In the BuildKit/overlayfs sandbox the store's
+        # 'active' dir is inherited from a lower (read-only) image layer, so
+        # libsemanage's atomic rename(active -> previous) fails with EXDEV
+        # ("Invalid cross-device link") and falls back to a non-atomic copy.
+        # After the 2026-06 bluefin-gdx base bump that fallback stopped
+        # committing the module: `semodule -i` exits 0 but the module is absent
+        # from `semodule -lfull`, tripping the assert below. Copying the tree to
+        # a same-filesystem sibling forces a full copy-up onto the upper layer;
+        # the rename(active -> previous) is then same-device and the atomic path
+        # is taken, so the module actually lands. set -e aborts before the rm if
+        # the cp fails, so /etc/selinux is never left missing.
+        cp -a /etc/selinux /etc/selinux.copyup
+        rm -rf /etc/selinux
+        mv /etc/selinux.copyup /etc/selinux
+
         semodule -X 300 -i "$cil"
         semodule -lfull | grep -q 'bluefin-gdx-swtpm' \
           || { echo "ERROR: swtpm SELinux module did not load"; exit 1; }
