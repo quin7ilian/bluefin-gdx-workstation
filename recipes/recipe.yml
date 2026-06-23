@@ -361,6 +361,11 @@ modules:
         # USB DAC enumeration watchdog (Schiit Multibit through the KVM hub) —
         # see the "USB DAC reconnect helpers" script module below.
         - dac-autorecover.timer
+        # swtpm SELinux allow for Win11 TPM-2.0 VMs — loaded at boot
+        # (run-if-absent) instead of baked in, because semodule in the overlay
+        # build sandbox is fragile. See the "swtpm (vTPM 2.0) SELinux" note
+        # below and /usr/libexec/bluefin-gdx-swtpm-policy.sh.
+        - bluefin-gdx-swtpm-policy.service
 
   # ─── Profiling tools (kernel-coupled, must match running kernel) ─────
   # perf and bpftrace are built from the kernel source tree and read
@@ -485,47 +490,6 @@ modules:
         chmod 0755 "$hook"
         test -x "$hook"
         echo "qemu hook present and executable: $hook"
-
-  # ─── swtpm (vTPM 2.0) SELinux + /var fixups for ostree ───────────────
-  # Win11 VMs need an emulated TPM 2.0 (swtpm). Two things break on this
-  # bootc/ostree base, both because RPM-owned /var content is dropped:
-  #   1. swtpm_setup can't create /var/lib/swtpm-localca (the EK-cert local CA
-  #      state dir) and can't write its log under /var/log/swtpm. Those dirs are
-  #      recreated at boot by files/.../tmpfiles.d/bluefin-gdx-swtpm.conf.
-  #   2. With the log dir recreated, the per-VM log is labeled virt_log_t, which
-  #      the policy in this base does NOT let swtpm_t write — so swtpm dies on
-  #      launch with the misleading "swtpm ... does not support TPM 2".
-  # The .cil (shipped by the files module) restores that one allow. We load it
-  # with `semodule -X 300 -i` — the bootc-supported way to bake a policy module
-  # into the image so it persists on the deployed system (per the SELinux
-  # maintainer; priority 300 leaves the default 400 free for local overrides).
-  - type: script
-    snippets:
-      - |
-        set -euo pipefail
-        cil=/usr/share/selinux/packages/bluefin-gdx-swtpm.cil
-        test -f "$cil" || { echo "ERROR: $cil not staged — files module didn't run or path changed"; exit 1; }
-
-        # Re-home the SELinux store onto THIS build layer's writable upper dir
-        # before semodule runs. In the BuildKit/overlayfs sandbox the store's
-        # 'active' dir is inherited from a lower (read-only) image layer, so
-        # libsemanage's atomic rename(active -> previous) fails with EXDEV
-        # ("Invalid cross-device link") and falls back to a non-atomic copy.
-        # After the 2026-06 bluefin-gdx base bump that fallback stopped
-        # committing the module: `semodule -i` exits 0 but the module is absent
-        # from `semodule -lfull`, tripping the assert below. Copying the tree to
-        # a same-filesystem sibling forces a full copy-up onto the upper layer;
-        # the rename(active -> previous) is then same-device and the atomic path
-        # is taken, so the module actually lands. set -e aborts before the rm if
-        # the cp fails, so /etc/selinux is never left missing.
-        cp -a /etc/selinux /etc/selinux.copyup
-        rm -rf /etc/selinux
-        mv /etc/selinux.copyup /etc/selinux
-
-        semodule -X 300 -i "$cil"
-        semodule -lfull | grep -q 'bluefin-gdx-swtpm' \
-          || { echo "ERROR: swtpm SELinux module did not load"; exit 1; }
-        echo "Loaded SELinux module bluefin-gdx-swtpm (swtpm_t -> virt_log_t log write)"
 
   # ─── USB DAC (Schiit Multibit) reconnect helpers ─────────────────────
   # The Schiit Jotunheim Multibit (C-Media CM6631A, 0d8c:0004) reaches this host

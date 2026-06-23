@@ -1,0 +1,19 @@
+# Load the swtpm SELinux policy module on the running system so Win11 TPM-2.0
+# VMs can start — see /usr/libexec/bluefin-gdx-swtpm-policy.sh for the full
+# rationale (and why this is done at boot, not at image-build time).
+[Unit]
+Description=Load bluefin-gdx swtpm SELinux policy module (run-if-absent)
+Documentation=file:///usr/libexec/bluefin-gdx-swtpm-policy.sh
+ConditionPathExists=/usr/share/selinux/packages/bluefin-gdx-swtpm.cil
+# Be in place before anything launches swtpm. libvirt starts swtpm per-VM; both
+# daemon names are listed so ordering holds whichever the base ships (the
+# missing one is simply ignored). Ordering only — it does not pull them in.
+Before=virtqemud.service libvirtd.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/bluefin-gdx-swtpm-policy.sh
+
+[Install]
+WantedBy=multi-user.target
