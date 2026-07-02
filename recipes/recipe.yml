@@ -4,7 +4,7 @@
 name: bluefin-gdx-workstation
 description: >-
   Custom Bluefin GDX LTS for an HPO/ML workstation.
-  Adds 1Password, Brave, Insync (GUI + Nautilus), and Zed.
+  Adds 1Password, Insync (GUI + Nautilus), and Zed.
   Disables zram, applies HPO sysctl/THP tunings, sets nvidia-drm.modeset=0
   for AMD-primary + Nvidia-compute-only multi-GPU config.
 
@@ -152,17 +152,6 @@ modules:
         gpgkey=https://downloads.1password.com/linux/keys/1password.asc
         EOF
 
-        # --- Brave (key file is brave-core.asc, not brave-browser.asc) ---
-        rpm --import https://brave-browser-rpm-release.s3.brave.com/brave-core.asc
-        cat > /etc/yum.repos.d/brave-browser.repo << 'EOF'
-        [brave-browser]
-        name=Brave Browser
-        enabled=1
-        gpgcheck=1
-        gpgkey=https://brave-browser-rpm-release.s3.brave.com/brave-core.asc
-        baseurl=https://brave-browser-rpm-release.s3.brave.com/$basearch
-        EOF
-
         # --- Insync (native EL10 repo, confirmed available 2026-05) ---
         # Install GUI + nautilus. The sync engine is started in the
         # background by a systemd --user unit (see
@@ -202,10 +191,9 @@ modules:
         # Single dnf transaction (faster than multiple).
         # gnome-browser-connector (CS10 AppStream) provides the native
         # messaging host so extensions.gnome.org "Install" buttons work
-        # in Firefox/Chrome/Brave without manual rpm-ostree layering.
+        # in Firefox/Chrome without manual rpm-ostree layering.
         dnf install -y \
           1password 1password-cli \
-          brave-browser \
           insync insync-nautilus \
           tailscale \
           gnome-browser-connector

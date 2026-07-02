@@ -29,7 +29,6 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 
 **Applications**
 - 1Password (GUI + CLI)
-- Brave browser
 - Insync (GUI + Nautilus extension), background-managed via a systemd user unit
 - Zed editor (official upstream tarball, installed to `/usr/lib/zed.app`)
 - `gnome-browser-connector` — native messaging host so extensions.gnome.org "Install" buttons work from the browser
@@ -99,7 +98,7 @@ insync show
 # The systemd user unit handles autostart now — leaving both on causes
 # a duplicate-launch race at login.
 
-# Sign in to 1Password, Brave.
+# Sign in to 1Password.
 
 # Install the CoolerControl custom-device plugin (one-off, lives in /var
 # and persists across image updates). This also:
