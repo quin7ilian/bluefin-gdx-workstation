@@ -30,7 +30,6 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 **Applications**
 - 1Password (GUI + CLI)
 - Insync (GUI + Nautilus extension), background-managed via a systemd user unit
-- Zed editor (official upstream tarball, installed to `/usr/lib/zed.app`)
 - `gnome-browser-connector` — native messaging host so extensions.gnome.org "Install" buttons work from the browser
 
 **Thermal / fan control**
@@ -128,4 +127,4 @@ cosign verify --key cosign.pub ghcr.io/quin7ilian/bluefin-gdx-workstation
 
 ## Build
 
-Built and signed automatically via the GitHub Actions workflow in `.github/workflows/build.yml` (BlueBuild template). Rebuilds pick up the latest upstream Zed tarball on each run.
+Built and signed automatically via the GitHub Actions workflow in `.github/workflows/build.yml` (BlueBuild template). The daily rebuild picks up the latest upstream Bluefin GDX base on each run.

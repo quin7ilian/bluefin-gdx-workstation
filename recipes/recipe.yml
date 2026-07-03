@@ -4,7 +4,7 @@
 name: bluefin-gdx-workstation
 description: >-
   Custom Bluefin GDX LTS for an HPO/ML workstation.
-  Adds 1Password, Insync (GUI + Nautilus), and Zed.
+  Adds 1Password and Insync (GUI + Nautilus).
   Disables zram, applies HPO sysctl/THP tunings, sets nvidia-drm.modeset=0
   for AMD-primary + Nvidia-compute-only multi-GPU config.
 
@@ -330,7 +330,7 @@ modules:
   #   free to boost. The unit + script (files/system/etc/systemd/system/,
   #   /usr/libexec/pin-amdgpu-mclk.sh) were deleted — recoverable from git
   #   history if the EDID ever needs to be rolled back.
-  #   (Root cause is NOT PSR — sink advertises PSR ver 0. See AGENTS.md #10.)
+  #   (Root cause is NOT PSR — sink advertises PSR ver 0. See AGENTS.md #9.)
   # - coolercontrol-bmc-bridge.service: companion oneshot that switches
   #   FAN1-5 to BMC manual mode before coolercontrold starts, and back
   #   to default mode when it stops. Enables CoolerControl to drive the
@@ -394,54 +394,6 @@ modules:
 
         dnf clean all
         rm -rf /var/cache/dnf /var/cache/yum
-
-  # ─── Zed editor (official upstream tarball) ──────────────────────────
-  # Installed to /usr/lib/zed.app (part of the OS image, read-only at
-  # runtime, updated only via image rebuilds). System-wide binary
-  # symlink at /usr/bin/zed and system-wide .desktop entry.
-  - type: script
-    snippets:
-      - |
-        set -euo pipefail
-
-        # zed.dev/api/.../latest/zed-linux-x86_64.tar.gz 307-redirects to
-        # the corresponding github.com/zed-industries/zed release asset.
-        # curl -L follows redirects, so this resolves to the current
-        # stable build on each image rebuild.
-        ZED_URL="https://zed.dev/api/releases/stable/latest/zed-linux-x86_64.tar.gz"
-        TMP_TARBALL="$(mktemp /tmp/zed-XXXXXX.tar.gz)"
-        trap 'rm -f "$TMP_TARBALL"' EXIT
-
-        echo "Downloading latest stable Zed..."
-        curl -fsSL "$ZED_URL" -o "$TMP_TARBALL"
-
-        # The tarball expands to ./zed.app/ — extract directly into /usr/lib.
-        mkdir -p /usr/lib
-        tar -xzf "$TMP_TARBALL" -C /usr/lib/
-
-        # System-wide terminal symlink. Zed 0.139+ consolidated the
-        # separate bin/cli into bin/zed (one binary handles both the
-        # terminal CLI shim and the GUI launcher). The official
-        # install.sh has the same `if bin/cli exists else bin/zed`
-        # fallback chain; we hard-code the new path since the LTS image
-        # rebuilds against current stable.
-        ln -sf /usr/lib/zed.app/bin/zed /usr/bin/zed
-
-        # System-wide .desktop entry with absolute paths.
-        # Newer tarballs ship dev.zed.Zed.desktop; older ones ship zed.desktop.
-        # The official install.sh has this same fallback.
-        src_desktop="/usr/lib/zed.app/share/applications/dev.zed.Zed.desktop"
-        [ -f "$src_desktop" ] || src_desktop="/usr/lib/zed.app/share/applications/zed.desktop"
-        install -Dm644 "$src_desktop" /usr/share/applications/dev.zed.Zed.desktop
-        sed -i \
-          -e "s|Icon=zed|Icon=/usr/lib/zed.app/share/icons/hicolor/512x512/apps/zed.png|" \
-          -e "s|Exec=zed|Exec=/usr/lib/zed.app/bin/zed|" \
-          /usr/share/applications/dev.zed.Zed.desktop
-
-        # Sanity check.
-        test -x /usr/lib/zed.app/bin/zed
-        test -L /usr/bin/zed
-        test -f /usr/share/applications/dev.zed.Zed.desktop
 
   # ─── Virtualization GUI + GPU-passthrough VM host bits ───────────────
   # The full KVM stack (libvirt, qemu-kvm, virtiofsd, swtpm, edk2-ovmf) is

@@ -280,7 +280,7 @@ refresh-bmc-channels:
 
 # Disable CoolerControl's liquidctl integration in /etc/coolercontrol/config.toml.
 # This workstation has no liquid cooling, and python3-liquidctl would require
-# enabling EPEL (which we deliberately avoid — see AGENTS.md constraint #8).
+# enabling EPEL (which we deliberately avoid — see AGENTS.md constraint #7).
 # Without this, coolercontrold logs a "liquidctl package not detected" warning
 # on every start and spawns liqctld as a subprocess that exits non-zero.
 # Idempotent: only edits if liquidctl_integration is currently `true`.
