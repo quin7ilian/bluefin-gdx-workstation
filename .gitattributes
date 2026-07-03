@@ -9,6 +9,7 @@
 
 # Binary files — never line-end-normalize even if git's auto-detection
 # guesses wrong.
+*.bin     binary
 *.png     binary
 *.jpg     binary
 *.jpeg    binary

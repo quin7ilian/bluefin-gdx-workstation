@@ -320,10 +320,17 @@ modules:
   #   enable it, so without this the web UI on :11987 is not reachable
   #   after a fresh rebase. Must come AFTER the CoolerControl install
   #   module so the unit file exists when `systemctl enable` runs.
-  # - amdgpu-pin-mclk.service: workstation-specific oneshot that pins
-  #   MCLK to its highest DPM state on the AMD GPU at boot — fixes the
-  #   Navi 33 / 5120x1440 ultrawide high-refresh blanking. The unit
-  #   file is shipped via files/system/etc/systemd/system/.
+  # - amdgpu-pin-mclk.service: REMOVED — superseded by the custom-EDID fix
+  #   (files/system/usr/lib/firmware/edid/g95sd-full.bin +
+  #   /usr/lib/bootc/kargs.d/15-amdgpu-edid.toml). Pinning MCLK stopped the
+  #   Navi 33 / 5120x1440 blanking, but only by forcing the GPU into `manual`
+  #   mode, which ALSO clamped the shader clock to ~810 MHz (half of boost) →
+  #   sluggish desktop. The EDID fixes the blanking at the display-timing layer
+  #   (larger 240 Hz back porch) instead, so mclk runs on `auto` and gfxclk is
+  #   free to boost. The unit + script (files/system/etc/systemd/system/,
+  #   /usr/libexec/pin-amdgpu-mclk.sh) were deleted — recoverable from git
+  #   history if the EDID ever needs to be rolled back.
+  #   (Root cause is NOT PSR — sink advertises PSR ver 0. See AGENTS.md #10.)
   # - coolercontrol-bmc-bridge.service: companion oneshot that switches
   #   FAN1-5 to BMC manual mode before coolercontrold starts, and back
   #   to default mode when it stops. Enables CoolerControl to drive the
@@ -342,7 +349,6 @@ modules:
     system:
       enabled:
         - coolercontrold.service
-        - amdgpu-pin-mclk.service
         - coolercontrol-bmc-bridge.service
         - bmc-ipmi-priority.service
         - tailscaled.service
