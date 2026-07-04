@@ -321,14 +321,15 @@ modules:
   #   after a fresh rebase. Must come AFTER the CoolerControl install
   #   module so the unit file exists when `systemctl enable` runs.
   # - amdgpu-pin-mclk.service: REMOVED — superseded by the custom-EDID fix
-  #   (files/system/usr/lib/firmware/edid/g95sd-216.bin +
+  #   (files/system/usr/lib/firmware/edid/g95sd-120.bin +
   #   /usr/lib/bootc/kargs.d/15-amdgpu-edid.toml). Pinning MCLK stopped the
   #   Navi 33 / 5120x1440 blanking, but only by forcing the GPU into `manual`
   #   mode, which ALSO clamped the shader clock to ~810 MHz (half of boost) →
   #   sluggish desktop. The EDID fixes it at the display-timing layer instead:
-  #   it runs the panel at 5120x1440@216 with a large vblank so the mclk switch
-  #   hides cleanly (240 Hz is unfixable — the panel's 357 kHz Hfreq ceiling
-  #   leaves no room for more vblank), so mclk runs on `auto` and gfxclk boosts.
+  #   it runs the panel at 5120x1440@120 uncompressed with a large (~1060us)
+  #   vblank so the mclk switch hides (240 Hz is unfixable — 42.5 Gbps exceeds
+  #   the W7500's UHBR10 output ceiling, forcing DSC), so mclk runs on `auto`
+  #   and gfxclk boosts.
   #   The unit + script (files/system/etc/systemd/system/,
   #   /usr/libexec/pin-amdgpu-mclk.sh) were deleted — recoverable from git
   #   history if the EDID ever needs to be rolled back.

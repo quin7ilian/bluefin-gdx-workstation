@@ -1,32 +1,34 @@
-# Custom EDID for the Samsung Odyssey G95SD (OLED G9, 5120x1440 over DP 1.4).
+# Custom EDID + DSC-off karg for the Samsung Odyssey G95SD (OLED G9, 5120x1440, DP 1.4).
 #
-# Runs the panel at 5120x1440@216 with a large (200-line / ~565us) vertical blank,
-# to eliminate the intermittent cursor-triggered screen blanking WITHOUT pinning
-# the GPU clock.
+# Runs the panel at 5120x1440@120 with a LARGE (~1060us, 2.3x native) vertical blank,
+# uncompressed (no DSC), to eliminate the cursor-triggered screen blanking while keeping
+# the GPU on `auto` (full clock). Two kargs work together:
+#   drm.edid_firmware=DP-1:edid/g95sd-120.bin  -- the big-vblank 120Hz timing
+#   amdgpu.dcdebugmask=0x4 (DC_DISABLE_DSC)    -- forces uncompressed / HBR3
 #
-# The blanking is the amdgpu memory-clock (UCLK) switch failing to hide inside the
-# vertical blank. Root cause is NOT PSR (sink advertises PSR ver 0). At 240 Hz it
-# is UNFIXABLE by timing: horizontal scan rate = refresh x Vtotal, and the panel's
-# EDID caps Hfreq at 357 kHz, so 240 x 1487 = 356.9 kHz is already the ceiling --
-# there is zero room to lengthen the vblank. Confirmed empirically: neither a
-# back-porch-redistributed EDID nor amdgpu.dcdebugmask=0x20 (force SubVP) stopped
-# it at 240 Hz. Dropping to 216 Hz (357000/216 -> up to 1652 Vtotal; we use 1640)
-# opens ~4x the vblank, so the UCLK switch hides cleanly and mclk runs on `auto`
-# -> full gfxclk (fast desktop), cool idle, no blank. 216 also divides 24 fps video
-# evenly (216/24 = 9). Pixel clock (1927 MHz) stays under the stock 1950 MHz range
-# limit, so bandwidth is unaffected.
+# Why this shape (all confirmed empirically on this exact panel):
+#  - The blank is the amdgpu memory-clock (UCLK) switch failing to hide in the vblank.
+#    NOT PSR (sink advertises PSR ver 0).
+#  - 240 Hz is IMPOSSIBLE to fix: 5120x1440@240@8bpc = 42.5 Gbps > the W7500's DP 2.1
+#    UHBR10 output ceiling (38.8 Gbps), so 240 always needs DSC, and DSC+mclk-switch is
+#    what blanks. No cable/adapter raises the GPU's output rate. 240 is off the menu
+#    (removed from this EDID).
+#  - At 120 Hz the driver was defaulting to an HBR2 link + DSC (dsc_clock_en=1), which
+#    blanks. dcdebugmask=0x4 disables DSC -> forces HBR3 (0x1e, which the link verifies) ->
+#    120@8bpc (~21 Gbps) fits uncompressed. That cut the blanking but didn't kill it: the
+#    mclk switch needs more vblank than native 120 Hz's ~459us. 60 Hz is clean because at
+#    half the pixel rate the switch fits its ~461us vblank; 120 Hz needs ~2x. So the EDID
+#    stretches the 120 Hz vertical blank to ~1060us (Vtotal 1650), still fitting HBR3
+#    uncompressed (25.3 < 25.92 Gbps). Native 120 Hz refresh, just extended blanking
+#    (within the panel's VRR envelope, so it accepts the timing).
 #
-# This retired the amdgpu-pin-mclk.service workaround (removed; recover from git
-# history), which stopped the 240 Hz blanking only by forcing `manual` mode --
-# clamping the shader clock to ~810 MHz (half of boost) -> sluggish desktop. The
-# trade is 240->216 Hz (imperceptible on OLED) for a fast, blank-free desktop.
+# 8bpc is fine here (no 10bpc/HDR needed on the workstation). Built from the monitor's own
+# stock EDID (HDR/colorimetry preserved); the @240 and native-@120 DisplayID timings are
+# replaced by the big-vblank @120 (preferred). Validated with edid-decode. .bin ships at
+# /usr/lib/firmware/edid/, pulled into the initramfs by .../dracut.conf.d/99-amdgpu-edid.conf.
+# Connector is DP-1 (the W7500's card1-DP-1).
 #
-# Built from the monitor's own stock EDID (HDR/colorimetry preserved); the @240
-# DisplayID timing is replaced by @216 (set preferred). Validated with edid-decode.
-# .bin ships at /usr/lib/firmware/edid/, pulled into the initramfs by
-# /usr/lib/dracut/dracut.conf.d/99-amdgpu-edid.conf. NEW karg in its own drop-in
-# (an add, not an override). Connector is DP-1 (the W7500's card1-DP-1).
-#
-# Fallback (no rebuild -- both .bins are in the initramfs): if 216 still blanks,
-# switch the filename below to g95sd-200.bin (even larger vblank).
-kargs = ["drm.edid_firmware=DP-1:edid/g95sd-216.bin"]
+# If 120 Hz still blanks even with this vblank, DP 1.4's bandwidth caps the vblank right at
+# the switch's requirement -> the fix is a DP->HDMI 2.1 adapter (the W7500->HDMI path has
+# UHBR10 headroom for a ~3x bigger vblank). See AGENTS.md.
+kargs = ["drm.edid_firmware=DP-1:edid/g95sd-120.bin", "amdgpu.dcdebugmask=0x4"]
