@@ -1,29 +1,32 @@
-# Custom EDID for the Samsung Odyssey G95SD (OLED G9, 5120x1440@240 over DP).
+# Custom EDID for the Samsung Odyssey G95SD (OLED G9, 5120x1440 over DP 1.4).
 #
-# Fixes intermittent cursor-triggered screen blanking. Root cause (confirmed, NOT
-# PSR — the sink advertises PSR ver 0): the stock EDID's 5120x1440@240 timing
-# leaves only 6 lines of vertical BACK porch, too short for the amdgpu memory-clock
-# (UCLK) switch to settle before active video resumes, so the switch bleeds into
-# the frame as a black flash. The custom EDID redistributes the (unchanged, 47-line)
-# vertical blanking to a 34-line back porch (Vfront 33->3, Vsync 8->10) so the switch
-# hides cleanly. Pixel clock / refresh / bandwidth are untouched. Result: mclk can
-# run on `auto` (full gfxclk, cooler idle) with no blanking — retiring the
-# amdgpu-pin-mclk.service workaround that clamped the shader clock to ~810 MHz.
-# Also raises the FreeSync floor 48->96 Hz (range-limits + AMD FreeSync block) to
-# avoid OLED low-refresh VRR flicker, so VRR becomes usable.
+# Runs the panel at 5120x1440@216 with a large (200-line / ~565us) vertical blank,
+# to eliminate the intermittent cursor-triggered screen blanking WITHOUT pinning
+# the GPU clock.
 #
-# Derived from THIS monitor's own stock EDID (HDR/colorimetry preserved) plus the
-# timing+VRR delta reverse-engineered from vpraion's proven OLED-G9 (G95C) fix:
-#   github.com/vpraion/odysseyg9-linux-240hz-vrr-hdr-noflicker
-# Validated with edid-decode: only the intended fields changed, all checksums good.
+# The blanking is the amdgpu memory-clock (UCLK) switch failing to hide inside the
+# vertical blank. Root cause is NOT PSR (sink advertises PSR ver 0). At 240 Hz it
+# is UNFIXABLE by timing: horizontal scan rate = refresh x Vtotal, and the panel's
+# EDID caps Hfreq at 357 kHz, so 240 x 1487 = 356.9 kHz is already the ceiling --
+# there is zero room to lengthen the vblank. Confirmed empirically: neither a
+# back-porch-redistributed EDID nor amdgpu.dcdebugmask=0x20 (force SubVP) stopped
+# it at 240 Hz. Dropping to 216 Hz (357000/216 -> up to 1652 Vtotal; we use 1640)
+# opens ~4x the vblank, so the UCLK switch hides cleanly and mclk runs on `auto`
+# -> full gfxclk (fast desktop), cool idle, no blank. 216 also divides 24 fps video
+# evenly (216/24 = 9). Pixel clock (1927 MHz) stays under the stock 1950 MHz range
+# limit, so bandwidth is unaffected.
 #
-# The .bin ships at /usr/lib/firmware/edid/ and is pulled into the initramfs by
-# /usr/lib/dracut/dracut.conf.d/99-amdgpu-edid.conf (amdgpu is force-loaded early).
-# NEW karg in its own drop-in (an add, not an override) — bootc aggregates it, same
-# pattern as this dir's other files. Connector is DP-1 (the W7500's card1-DP-1).
+# This retired the amdgpu-pin-mclk.service workaround (removed; recover from git
+# history), which stopped the 240 Hz blanking only by forcing `manual` mode --
+# clamping the shader clock to ~810 MHz (half of boost) -> sluggish desktop. The
+# trade is 240->216 Hz (imperceptible on OLED) for a fast, blank-free desktop.
 #
-# Fallbacks (no rebuild for the first two — the .bins are both in the initramfs):
-#   - blanking fix WITHOUT the VRR-floor change: switch filename to g95sd-vblank.bin
-#   - revert entirely: remove this file; the old amdgpu-pin-mclk.service
-#     clock-pinning workaround was removed but is recoverable from git history.
-kargs = ["drm.edid_firmware=DP-1:edid/g95sd-full.bin"]
+# Built from the monitor's own stock EDID (HDR/colorimetry preserved); the @240
+# DisplayID timing is replaced by @216 (set preferred). Validated with edid-decode.
+# .bin ships at /usr/lib/firmware/edid/, pulled into the initramfs by
+# /usr/lib/dracut/dracut.conf.d/99-amdgpu-edid.conf. NEW karg in its own drop-in
+# (an add, not an override). Connector is DP-1 (the W7500's card1-DP-1).
+#
+# Fallback (no rebuild -- both .bins are in the initramfs): if 216 still blanks,
+# switch the filename below to g95sd-200.bin (even larger vblank).
+kargs = ["drm.edid_firmware=DP-1:edid/g95sd-216.bin"]
