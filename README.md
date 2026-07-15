@@ -30,6 +30,7 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 **Applications**
 - 1Password (GUI + CLI)
 - Insync (GUI + Nautilus extension), background-managed via a systemd user unit
+- Zed editor (official upstream tarball, installed to `/usr/lib/zed.app`)
 - `gnome-browser-connector` — native messaging host so extensions.gnome.org "Install" buttons work from the browser
 - Chromium — installed and wired to the host 1Password app via `ujust setup-chromium`. Deliberately a **Flatpak, not a host RPM**: CentOS Stream 10's mesa is built without the VA-API frontend (no `mesa-va-drivers` exists for EL10 in any repo), so a host-native Chromium would decode video in software. The Flatpak's freedesktop runtime bundles its own AMD VA driver, so hardware video decode on the W7500 is available with no host-mesa changes — verify at `chrome://gpu`. (Trivalent itself can't be layered here: its RPM requires glibc ≥ 2.42 and CS10 ships 2.39.)
 
@@ -130,3 +131,4 @@ cosign verify --key cosign.pub ghcr.io/quin7ilian/bluefin-gdx-workstation
 ## Build
 
 Built and signed automatically via the GitHub Actions workflow in `.github/workflows/build.yml` (BlueBuild template). The daily rebuild picks up the latest upstream Bluefin GDX base on each run.
+Each rebuild also picks up the latest stable upstream Zed tarball.
