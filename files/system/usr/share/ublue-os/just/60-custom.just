@@ -111,6 +111,115 @@ unfix-spotify-decoration:
     echo "Reset flatpak overrides for com.spotify.Client."
     echo "Restart Spotify; the unstyled blue CSD will return."
 
+# ─── Chromium (Flatpak) + 1Password bridge + hardware video decode ────
+# Chromium ships as a Flatpak, NOT a host RPM, for a hardware reason: this base
+# is CentOS Stream 10, whose mesa is built WITHOUT the gallium-VA frontend
+# (libgallium-*.so exports no __vaDriverInit*, and no EL10 repo — base, EPEL,
+# negativo17, RPM Fusion — ships an AMD mesa-va-drivers). So a host-native
+# Chromium would get NO hardware video decode on the W7500. The Flatpak's
+# org.freedesktop.Platform.GL.default runtime bundles its OWN
+# radeonsi_drv_video.so, so Chromium decodes in hardware against the amdgpu
+# render node with zero host-mesa changes — the same reason the Flatpak
+# Firefox HW-decodes and a host RPM browser wouldn't. (Trivalent itself is
+# not installable here: its RPM needs glibc >= 2.42 and CS10 ships 2.39.)
+#
+# 1Password lives on the host (RPM) while Chromium is sandboxed, so the extension
+# needs a sandbox->host bridge. Three per-user pieces (they live here in ujust,
+# not baked into the image, because they land in $HOME/.var/app — the image
+# only writes /usr and /etc):
+#   1. a wrapper that `flatpak-spawn --host`s the host 1Password-BrowserSupport
+#      (byte-identical to the Firefox one).
+#   2. a native-messaging manifest. NOTE the Chromium/Firefox divergence:
+#      Chromium uses "allowed_origins" with chrome-extension:// IDs (NOT
+#      Firefox's "allowed_extensions" with {uuid}s) and reads it from
+#      config/chromium/NativeMessagingHosts/ — a different path AND format.
+#      The origins below are copied verbatim from the manifest 1Password
+#      generates for a NATIVE Chromium, so they're authoritative.
+#   3. a flatpak override granting talk access to org.freedesktop.Flatpak —
+#      exactly what `flatpak-spawn --host` needs (the "override command").
+# Plus 1Password's allowlist must contain `flatpak-session-helper`: for ANY
+# flatpak browser, 1Password sees the connection arriving via the session
+# helper, not as "chromium", so THAT is the operative entry. We add it
+# idempotently at runtime rather than baking files/system/etc/1password/...,
+# because that path already exists in the base image's /usr/etc and a
+# user-modified /etc copy wins the ostree 3-way merge anyway (constraint #11).
+#
+# Idempotent — safe to re-run. After it, verify HW decode at chrome://gpu.
+setup-chromium:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    APP=org.chromium.Chromium
+
+    echo "==> Installing Chromium (Flathub, system) if missing..."
+    if flatpak info "$APP" >/dev/null 2>&1; then
+        echo "    Chromium already installed ($(flatpak info "$APP" --show-ref 2>/dev/null || echo "$APP"))."
+    else
+        flatpak install -y flathub "$APP"
+    fi
+
+    base="$HOME/.var/app/$APP"
+    wrap="$base/data/bin/1password-wrapper.sh"
+    nmdir="$base/config/chromium/NativeMessagingHosts"
+    manifest="$nmdir/com.1password.1password.json"
+
+    echo "==> Writing the 1Password sandbox->host wrapper..."
+    mkdir -p "$(dirname "$wrap")"
+    # printf, not a heredoc: just preserves the recipe's 4-space indent, so a
+    # heredoc EOF terminator wouldn't match (same as fix-spotify-decoration).
+    printf '%s\n' \
+      '#!/bin/bash' \
+      'if [ "${container-}" = flatpak ]; then' \
+      '    flatpak-spawn --host /opt/1Password/1Password-BrowserSupport "$@"' \
+      'else' \
+      '    exec /opt/1Password/1Password-BrowserSupport "$@"' \
+      'fi' \
+      > "$wrap"
+    chmod +x "$wrap"
+
+    echo "==> Writing the Chromium native-messaging manifest..."
+    mkdir -p "$nmdir"
+    printf '%s\n' \
+      '{' \
+      '  "name": "com.1password.1password",' \
+      '  "description": "1Password BrowserSupport",' \
+      "  \"path\": \"$wrap\"," \
+      '  "type": "stdio",' \
+      '  "allowed_origins": [' \
+      '    "chrome-extension://hjlinigoblmkhjejkmbegnoaljkphmgo/",' \
+      '    "chrome-extension://bkpbhnjcbehoklfkljkkbbmipaphipgl/",' \
+      '    "chrome-extension://gejiddohjgogedgjnonbofjigllpkmbf/",' \
+      '    "chrome-extension://khgocmkkpikpnmmkgmdnfckapcdkgfaf/",' \
+      '    "chrome-extension://aeblfdkhhhdcdjpifhhbdiojplfjncoa/",' \
+      '    "chrome-extension://dppgmdbiimibapkepcbdbmkaabgiofem/"' \
+      '  ]' \
+      '}' \
+      > "$manifest"
+
+    echo "==> Applying the flatpak override (talk to org.freedesktop.Flatpak)..."
+    flatpak override --user --talk-name=org.freedesktop.Flatpak "$APP"
+
+    echo "==> Ensuring 1Password's allowlist trusts flatpak browsers..."
+    allow=/etc/1password/custom_allowed_browsers
+    if [ -f "$allow" ] && grep -qE '^[[:space:]]*flatpak-session-helper[[:space:]]*$' "$allow"; then
+        echo "    'flatpak-session-helper' already present in $allow."
+    else
+        echo "    Adding 'flatpak-session-helper' to $allow (needs sudo)..."
+        echo "flatpak-session-helper" | sudo tee -a "$allow" >/dev/null
+    fi
+
+    echo
+    echo "Done. Next steps:"
+    echo "  1) Restart Chromium so it re-reads the manifest:"
+    echo "       flatpak kill $APP     # then relaunch Chromium"
+    echo "  2) Install the 1Password extension in Chromium (Chrome Web Store)."
+    echo "     If you already use 1Password with Firefox, desktop browser"
+    echo "     integration is on and Chromium should connect on launch. If it says"
+    echo "     'browser not detected', fully quit and reopen the 1Password app."
+    echo "  3) Confirm hardware video decode at  chrome://gpu"
+    echo "     ('Video Decode' should list a hardware-accelerated codec). If it's"
+    echo "     software, enable hardware-accelerated video decode in chrome://flags,"
+    echo "     or launch with --enable-features=VaapiVideoDecoder,VaapiVideoDecodeLinuxGL."
+
 # Install the cc-plugin-custom-device CoolerControl plugin. The plugin
 # is NOT baked into the image — coolercontrold 4.x migrates
 # /etc/coolercontrol/plugins → symlink to /var/lib/coolercontrol/plugins

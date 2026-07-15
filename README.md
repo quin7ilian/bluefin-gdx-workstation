@@ -31,6 +31,7 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 - 1Password (GUI + CLI)
 - Insync (GUI + Nautilus extension), background-managed via a systemd user unit
 - `gnome-browser-connector` — native messaging host so extensions.gnome.org "Install" buttons work from the browser
+- Chromium — installed and wired to the host 1Password app via `ujust setup-chromium`. Deliberately a **Flatpak, not a host RPM**: CentOS Stream 10's mesa is built without the VA-API frontend (no `mesa-va-drivers` exists for EL10 in any repo), so a host-native Chromium would decode video in software. The Flatpak's freedesktop runtime bundles its own AMD VA driver, so hardware video decode on the W7500 is available with no host-mesa changes — verify at `chrome://gpu`. (Trivalent itself can't be layered here: its RPM requires glibc ≥ 2.42 and CS10 ships 2.39.)
 
 **Thermal / fan control**
 - `coolercontrold` from the upstream COPR — enabled at build time, web UI on `http://localhost:11987`
@@ -55,6 +56,7 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 - BMC virtual USB ethernet (`usb0`, USB ID `046b:ffb0`) marked unmanaged to suppress NM's auto-activation retry loop and the GNOME "network disconnected" notifications it produces. Re-enable with `nmcli device set usb0 managed yes` if you need it for BMC USB tunneling
 
 **Convenience**
+- `ujust setup-chromium` — installs the Chromium Flatpak and bridges it to the host 1Password app (native-messaging wrapper + Chromium manifest + `flatpak override`), and adds `flatpak-session-helper` to 1Password's allowlist. Idempotent; run once post-rebase
 - `ujust enable-insync` / `ujust disable-insync` / `ujust status-insync`
 - `ujust toggle-ai-mode` / `ujust status-ai-mode` — flip local AI models (phi-4 curator on `:8081`, Codestral 22B on `:8082`) between AI MODE (on, GPU-backed) and HPO MODE (off, both 4090s freed). Gated by `~/.config/local-ai/enabled`; survives reboot.
 - `ujust install-cc-plugin` — installs the CoolerControl custom-device plugin post-rebase (also silences the liquidctl warning)
