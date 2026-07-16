@@ -21,7 +21,7 @@
 # usbcore is BUILT-IN on this kernel (`modinfo usbcore` => builtin), so a
 # modprobe.d `options usbcore quirks=` would be ignored — the kernel cmdline is
 # the only reliable vehicle. This is a NEW karg in its own kargs.d file, which
-# bootc aggregates (same proven pattern as 10-vm-windows.toml; contrast the
+# bootc aggregates (same add-only pattern as 15-amdgpu-edid.toml; contrast the
 # nvidia-drm.modeset override in recipe.yml, which had to edit the base file in
 # place because cross-file karg *override* is undefined — this is an add, not an
 # override, so a drop-in is correct).

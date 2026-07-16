@@ -1,11 +1,11 @@
 [Unit]
-Description=BMC fan-mode bridge for CoolerControl (FAN1-5 via ASRock Rack OEM IPMI)
+Description=BMC fan-mode bridge for CoolerControl (FAN1-7 via ASRock Rack OEM IPMI)
 # Wait for IPMI modules and /dev/ipmi0 before we try to talk to the BMC.
 After=systemd-modules-load.service
 # Run BEFORE coolercontrold so manual mode is active before CC issues writes.
 Before=coolercontrold.service
 # Bind lifecycle to coolercontrold: when it stops (clean or crash), we stop
-# too — ExecStop returns FAN1-5 to BMC auto control as a failsafe.
+# too — ExecStop returns FAN1-7 to BMC auto control as a failsafe.
 BindsTo=coolercontrold.service
 
 [Service]

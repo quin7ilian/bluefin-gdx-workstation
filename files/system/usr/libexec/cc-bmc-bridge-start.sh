@@ -7,7 +7,7 @@
 #
 # Strategy: read the BMC's current duty register (which holds whatever
 # the BMC's auto-curve currently has set), write those SAME values to
-# the manual register, then flip FAN1-5 to manual mode. When mode flips,
+# the manual register, then flip FAN1-7 to manual mode. When mode flips,
 # manual mode immediately latches the same duties — no fan-speed jump.
 #
 # See cc-set-fan-duty.sh for the 0x00/0x01 → 0x05 rationale and the

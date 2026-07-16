@@ -3,14 +3,14 @@
 
 name: bluefin-gdx-workstation
 description: >-
-  Custom Bluefin GDX LTS for an HPO/ML workstation.
+  Custom Bluefin LTS NVIDIA image for an HPO/ML workstation.
   Adds 1Password and Insync (GUI + Nautilus).
   Also adds the Zed editor from its official upstream tarball.
   Disables zram, applies HPO sysctl/THP tunings, sets nvidia-drm.modeset=0
   for AMD-primary + Nvidia-compute-only multi-GPU config.
 
-base-image: ghcr.io/ublue-os/bluefin-gdx
-image-version: lts
+base-image: ghcr.io/projectbluefin/bluefin-lts-nvidia
+image-version: stable
 
 modules:
   # ─── System config files ─────────────────────────────────────────────
@@ -48,12 +48,13 @@ modules:
 
   # ─── Kernel cmdline: disable DRM modeset on Nvidia GPUs ──────────────
   # Required for AMD-primary-display + Nvidia-compute-only setup.
-  # Prevents Mutter from scheduling work on the 4090s and doing
+  # Prevents Mutter from scheduling work on the Nvidia compute cards and doing
   # expensive cross-GPU framebuffer copies. CUDA is unaffected
   # (CUDA uses /dev/nvidia* char devices, not DRM).
   #
   # Why this is a `script` module, not a `kargs` module:
-  # the Bluefin GDX base image ships /usr/lib/bootc/kargs.d/00-nvidia.toml
+  # the Bluefin LTS NVIDIA base image ships
+  # /usr/lib/bootc/kargs.d/00-nvidia.toml
   # with `nvidia-drm.modeset=1` (uBlue's standard Nvidia-display config,
   # required for Wayland-on-Nvidia setups). A separate kargs.d file
   # setting `=0` does NOT override it — bootc upstream documents
@@ -69,8 +70,33 @@ modules:
     snippets:
       - |
         set -euo pipefail
+
+        # This is the host-side CUDA contract the old GDX image supplied:
+        # the kernel driver, CUDA driver libraries, and container integration.
+        # Workload libraries/toolchains (CUDA runtime, cuBLAS, cuDNN, nvcc,
+        # etc.) belong in workload containers. Fail the build if the new base
+        # ever stops providing the host pieces our CUDA setup depends on.
+        rpm -q \
+          nvidia-driver \
+          nvidia-driver-cuda \
+          nvidia-driver-cuda-libs \
+          nvidia-container-toolkit
+        test -e /usr/lib64/libcuda.so.1 || { echo "ERROR: libcuda.so.1 missing from Bluefin LTS NVIDIA base"; exit 1; }
+        command -v nvidia-smi >/dev/null || { echo "ERROR: nvidia-smi missing from Bluefin LTS NVIDIA base"; exit 1; }
+        command -v nvidia-ctk >/dev/null || { echo "ERROR: nvidia-ctk missing from Bluefin LTS NVIDIA base"; exit 1; }
+        mapfile -t base_kernels < <(rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n')
+        ((${#base_kernels[@]} == 1)) || { echo "ERROR: expected exactly one base kernel, found: ${base_kernels[*]}"; exit 1; }
+        driver_version=$(rpm -q nvidia-driver --qf '%{VERSION}')
+        for module in nvidia nvidia_uvm; do
+          module_version=$(modinfo -k "${base_kernels[0]}" -F version "$module")
+          test "$module_version" = "$driver_version" || {
+            echo "ERROR: $module module $module_version != userspace driver $driver_version"
+            exit 1
+          }
+        done
+
         karg_file=/usr/lib/bootc/kargs.d/00-nvidia.toml
-        test -f "$karg_file" || { echo "ERROR: $karg_file missing — Bluefin GDX base layout changed, recipe needs update"; exit 1; }
+        test -f "$karg_file" || { echo "ERROR: $karg_file missing — Bluefin LTS NVIDIA base layout changed, recipe needs update"; exit 1; }
         grep -q 'nvidia-drm.modeset=1' "$karg_file" || { echo "ERROR: $karg_file no longer contains 'nvidia-drm.modeset=1' — base changed, recipe needs update"; cat "$karg_file"; exit 1; }
         sed -i 's/nvidia-drm.modeset=1/nvidia-drm.modeset=0/g' "$karg_file"
         grep -q 'nvidia-drm.modeset=0' "$karg_file"
@@ -78,14 +104,12 @@ modules:
         echo "Patched $karg_file:"
         cat "$karg_file"
 
-  # ─── Make the Nvidia 4090s COMPUTE-ONLY (no graphics DRM stack) ───────
+  # ─── Make the Nvidia cards COMPUTE-ONLY (no graphics DRM stack) ───────
   # `nvidia-drm.modeset=0` above is necessary but NOT sufficient. The base
-  # still loads nvidia_drm + nvidia_modeset, which register the 4090s as DRM
+  # still loads nvidia_drm + nvidia_modeset, which register the cards as DRM
   # graphics devices (/dev/dri/cardN, /dev/nvidia-modeset). GNOME/Mutter and
-  # Electron apps then enumerate and hold those open via EGL/GLX/Vulkan — which
-  # (a) wastes the compute GPUs on the desktop and (b) makes runtime VFIO
-  # passthrough WEDGE THE KERNEL: the open handles block libvirt's managed
-  # detach ("NVRM: ... non-zero usage count"), forcing a reboot.
+  # Electron apps then enumerate and hold those open via EGL/GLX/Vulkan,
+  # wasting the compute GPUs on desktop work and introducing cross-GPU paths.
   #
   # Fix: keep the graphics modules unloaded so the desktop physically cannot
   # touch the cards. CUDA needs only `nvidia` + `nvidia_uvm`, which still load.
@@ -96,9 +120,10 @@ modules:
   #   3. disable the Nvidia Vulkan ICD so Vulkan apps don't enumerate the cards
   #      either (EGL/GLX are already dead once nvidia_modeset is gone).
   #
-  # VERIFY after rebase: `lsmod | grep -E 'nvidia_drm|nvidia_modeset'` is empty,
-  # `ls /sys/bus/pci/devices/0000:02:00.0/drm/` is empty, and CUDA still runs
-  # (nvidia + nvidia_uvm load on demand; nvidia-smi shows both cards).
+  # VERIFY after rebase: load the driver with `nvidia-smi`, confirm `lsmod |
+  # grep -E 'nvidia_drm|nvidia_modeset'` is empty, and confirm every PCI device
+  # bound to the Nvidia driver has no `drm/` directory. CUDA must still run
+  # (`nvidia` + `nvidia_uvm` load on demand; nvidia-smi shows every card).
   - type: script
     snippets:
       - |
@@ -107,11 +132,31 @@ modules:
         # (1) shipped via the files module — assert it landed.
         bl=/usr/lib/modprobe.d/nvidia-compute-only.conf
         test -f "$bl" || { echo "ERROR: $bl not staged — files module didn't run or path changed"; exit 1; }
+        grep -qx 'blacklist nvidia_drm' "$bl"
+        grep -qx 'blacklist nvidia_modeset' "$bl"
+        grep -qx 'install nvidia_drm /usr/bin/true' "$bl"
+        grep -qx 'install nvidia_modeset /usr/bin/true' "$bl"
+        ! grep -Eq '^(blacklist|install)[[:space:]]+(nvidia|nvidia_uvm)([[:space:]]|$)' "$bl" || {
+          echo "ERROR: compute-capable nvidia/nvidia_uvm module disabled by $bl"
+          exit 1
+        }
+        # Assert the MERGED modprobe view (across every modprobe.d file) still
+        # blacklists + install-overrides the two graphics modules. Capture once
+        # into a var and grep the string — do NOT pipe `modprobe -c` into
+        # `grep -q`: when uname -r matches the image kernel (a local build),
+        # `modprobe -c` dumps the full ~2 MB modules.alias table, `grep -q`
+        # closes the pipe on the first match, `modprobe` dies of SIGPIPE, and
+        # under `pipefail` that aborts the build with a bare rc=141.
+        merged_modprobe="$(modprobe -c)"
+        grep -qx 'blacklist nvidia_drm'                 <<<"$merged_modprobe"
+        grep -qx 'blacklist nvidia_modeset'             <<<"$merged_modprobe"
+        grep -qx 'install nvidia_drm /usr/bin/true'     <<<"$merged_modprobe"
+        grep -qx 'install nvidia_modeset /usr/bin/true' <<<"$merged_modprobe"
 
         # (2) Strip ALL nvidia modules from the base's dracut force_drivers.
         # The display is the AMD W7500, so nvidia is never needed in the ramdisk.
         # Removing it (a) keeps nvidia_drm/nvidia_modeset out so the desktop can't
-        # grab the 4090s, and (b) shrinks the initramfs massively — the huge open
+        # grab the cards, and (b) shrinks the initramfs massively — the huge open
         # nvidia.ko + GSP firmware drop out. That size cut is essential: /boot is
         # only ~769 MB, and a regenerated (custom-checksum) initramfs needs its
         # own /boot copy, so it must be small enough for two to coexist. CUDA is
@@ -128,7 +173,9 @@ modules:
 
         # (3) disable the Nvidia Vulkan ICD (CUDA does not use Vulkan).
         shopt -s nullglob
-        for icd in /usr/share/vulkan/icd.d/nvidia_icd*.json; do
+        icds=(/usr/share/vulkan/icd.d/nvidia_icd*.json)
+        ((${#icds[@]} > 0)) || { echo "ERROR: Nvidia Vulkan ICD missing — base layout changed, re-check compute-only isolation"; exit 1; }
+        for icd in "${icds[@]}"; do
           mv "$icd" "${icd}.disabled"
           echo "Disabled Vulkan ICD: $icd -> ${icd}.disabled"
         done
@@ -295,8 +342,8 @@ modules:
         rm -rf /var/cache/dnf /var/cache/yum
 
   # ─── BMC IPMI priority helper: assert staged + executable ────────────
-  # bmc-ipmi-priority.service ExecStart's this helper; like the libvirt qemu
-  # hook and the DAC nudge, it silently no-ops if it isn't +x. The files
+  # bmc-ipmi-priority.service ExecStart's this helper; like the DAC nudge, it
+  # silently no-ops if it isn't +x. The files
   # module preserves the repo's 0755, but chmod + assert here so a dropped
   # exec bit (or a moved path / missing drop-in) breaks the build loudly
   # instead of shipping a fan-control fix that never runs. Must come AFTER the
@@ -337,7 +384,7 @@ modules:
   #   history if the EDID ever needs to be rolled back.
   #   (Root cause is NOT PSR — sink advertises PSR ver 0. See AGENTS.md #9.)
   # - coolercontrol-bmc-bridge.service: companion oneshot that switches
-  #   FAN1-5 to BMC manual mode before coolercontrold starts, and back
+  #   FAN1-7 to BMC manual mode before coolercontrold starts, and back
   #   to default mode when it stops. Enables CoolerControl to drive the
   #   ASRock Rack BMC's fan PWMs via the cc-set-fan-duty.sh wrapper.
   #   BindsTo=coolercontrold.service + WantedBy=coolercontrold.service:
@@ -360,11 +407,6 @@ modules:
         # USB DAC enumeration watchdog (Schiit Multibit through the KVM hub) —
         # see the "USB DAC reconnect helpers" script module below.
         - dac-autorecover.timer
-        # swtpm SELinux allow for Win11 TPM-2.0 VMs — loaded at boot
-        # (run-if-absent) instead of baked in, because semodule in the overlay
-        # build sandbox is fragile. See the "swtpm (vTPM 2.0) SELinux" note
-        # below and /usr/libexec/bluefin-gdx-swtpm-policy.sh.
-        - bluefin-gdx-swtpm-policy.service
 
   # ─── Profiling tools (kernel-coupled, must match running kernel) ─────
   # perf and bpftrace are built from the kernel source tree and read
@@ -448,48 +490,6 @@ modules:
         test -L /usr/bin/zed
         test -f /usr/share/applications/dev.zed.Zed.desktop
 
-  # ─── Virtualization GUI + GPU-passthrough VM host bits ───────────────
-  # The full KVM stack (libvirt, qemu-kvm, virtiofsd, swtpm, edk2-ovmf) is
-  # ALREADY in the bluefin-gdx base and `virtqemud` is pre-enabled — we do
-  # NOT re-install any of it. Two gaps are filled here:
-  #   1. virt-manager (the GTK GUI). The base ships only virt-manager-common
-  #      (backend data), not the window. Layered as an RPM rather than the
-  #      Flatpak so it talks to the system libvirt socket without the
-  #      Flatpak's /run/libvirt access workaround. From CS10 AppStream.
-  #      (SPICE was removed in EL10, so the VM console is VNC — see the
-  #      win11-trading.xml template shipped below.)
-  #   2. The libvirt qemu hook staged at /etc/libvirt/hooks/qemu (via the
-  #      `files` module) must be executable, or libvirt silently won't run
-  #      it. chmod + assert here.
-  #
-  # The Win11 trading VM itself (one RTX 4090 passed through + Sunshine) is
-  # finished post-rebase via `ujust setup-vm-host`: it adds you to the libvirt
-  # group, installs the Moonlight client, activates the default NAT network,
-  # and DISCOVERS your user/uid + the target GPU + its pinned local-AI service
-  # into /etc/bluefin-gdx/vm-passthrough.conf (which the hook reads — so no
-  # username or GPU id is baked into the image). The kvm.ignore_msrs
-  # Windows-stability karg ships as a kargs.d drop-in at
-  # files/system/usr/lib/bootc/kargs.d/10-vm-windows.toml.
-  - type: script
-    snippets:
-      - |
-        set -euo pipefail
-
-        # virt-manager GUI (CS10 AppStream — base already pulled in its deps
-        # via virt-manager-common, so this is a small add).
-        dnf install -y virt-manager
-        dnf clean all
-        rm -rf /var/cache/dnf /var/cache/yum
-
-        # The qemu hook is staged read-only by the `files` module (which runs
-        # first); libvirt only executes hooks that are +x. Fail loudly if the
-        # path ever moves so we don't silently ship a dead hook.
-        hook=/etc/libvirt/hooks/qemu
-        test -f "$hook" || { echo "ERROR: $hook not staged — files module didn't run or path changed"; exit 1; }
-        chmod 0755 "$hook"
-        test -x "$hook"
-        echo "qemu hook present and executable: $hook"
-
   # ─── USB DAC (Schiit Multibit) reconnect helpers ─────────────────────
   # The Schiit Jotunheim Multibit (C-Media CM6631A, 0d8c:0004) reaches this host
   # through the USB3 KVM switch's Genesys hub and fails on re-attach in two ways:
@@ -512,8 +512,8 @@ modules:
   #   - the `ujust reconnect-dac` recipe in 60-custom.just    — manual fallback.
   #
   # The helpers run from systemd ExecStart, which silently does nothing if the
-  # script isn't +x — so chmod + assert here (same reasoning as the libvirt qemu
-  # hook). Also assert the rules/units/karg landed so a moved path breaks the
+  # script isn't +x — so chmod + assert here. Also assert the rules/units/karg
+  # landed so a moved path breaks the
   # build loudly instead of shipping a dead fix.
   - type: script
     snippets:
@@ -572,25 +572,41 @@ modules:
         echo "Regenerating initramfs for kernel ${kver} -> ${img}"
 
         # Same flags as BlueBuild's initramfs module (ostree boot module is
-        # REQUIRED or the system won't boot); omit ALL nvidia modules ('nvidia'
-        # as a substring pattern matches nvidia, nvidia_drm, nvidia_modeset,
-        # nvidia_uvm, nvidia_peermem).
+        # REQUIRED or the system won't boot). Dracut matches module names
+        # exactly here, so list every Nvidia GPU module explicitly; a bare
+        # `--omit-drivers nvidia` does NOT omit drm/modeset/uvm/peermem.
+        # Bluefin LTS NVIDIA builds dracut's staging tree under /boot to avoid
+        # an overlayfs cross-device rename failure. Match that current upstream
+        # invocation here; zstd also keeps the deployment below the /boot limit.
         dracut --kver "$kver" --force --add 'ostree' --no-hostonly --reproducible \
-          --omit-drivers 'nvidia' "$img"
+          --tmpdir /boot --zstd \
+          --omit-drivers 'nvidia nvidia_drm nvidia_modeset nvidia_uvm nvidia_peermem' \
+          "$img"
         chmod 0600 "$img"
 
         # Report the size — this is the number that has to fit in /boot.
         echo "Regenerated initramfs size: $(du -h "$img" | cut -f1)"
 
         # Fail the build loudly if any nvidia kernel module slipped back in.
-        if command -v lsinitrd >/dev/null 2>&1; then
-          if lsinitrd "$img" 2>/dev/null | grep -Eiq 'nvidia[a-z_]*\.ko'; then
-            echo "ERROR: an nvidia module is still present in the regenerated initramfs:"
-            lsinitrd "$img" 2>/dev/null | grep -Ei 'nvidia[a-z_]*\.ko'
-            exit 1
-          fi
-          echo "Verified: no nvidia kernel modules in the regenerated initramfs"
+        # lsinitrd ships with dracut (which we just invoked), so its absence is
+        # a broken base, not a reason to skip verification — assert it exists
+        # rather than silently passing a possibly-nvidia-laden initramfs.
+        command -v lsinitrd >/dev/null 2>&1 || { echo "ERROR: lsinitrd unavailable — cannot verify the regenerated initramfs"; exit 1; }
+        initrd_listing=/tmp/bluefin-gdx-initramfs-listing.txt
+        lsinitrd "$img" >"$initrd_listing" 2>/dev/null
+        nvidia_gpu_module_re='/(nvidia|nvidia[-_](drm|modeset|uvm|peermem))\.ko(\.[[:alnum:]]+)?$'
+        if grep -Eiq "$nvidia_gpu_module_re" "$initrd_listing"; then
+          echo "ERROR: an nvidia module is still present in the regenerated initramfs:"
+          grep -Ei "$nvidia_gpu_module_re" "$initrd_listing"
+          exit 1
         fi
+        echo "Verified: no nvidia kernel modules in the regenerated initramfs"
+        grep -q 'usr/lib/firmware/edid/g95sd-120.bin' "$initrd_listing" || {
+          echo "ERROR: custom G95SD EDID missing from regenerated initramfs"
+          exit 1
+        }
+        echo "Verified: custom G95SD EDID is present in the regenerated initramfs"
+        rm -f "$initrd_listing"
 
   # ─── Image signing (cosign) ──────────────────────────────────────────
   - type: signing

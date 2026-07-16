@@ -265,7 +265,7 @@ install-cc-plugin:
     else
         echo "Deploying pre-populated config from $template..."
         sudo install -m644 "$template" "$plugin_config"
-        echo "  5 fan channels + 12 temp sensors defined; ready to use."
+        echo "  7 fan channels + 12 temp sensors defined; ready to use."
         changed=1
     fi
 
@@ -302,7 +302,7 @@ install-cc-plugin:
     echo
     echo "Done. Next steps:"
     echo "  - Open http://localhost:11987 — the WRX80 BMC device with"
-    echo "    5 fans and 12 temp sensors should appear automatically."
+    echo "    7 fans and 12 temp sensors should appear automatically."
     echo "  - Configure fan curves in the UI per:"
     echo "      /usr/share/cc-bmc-bridge/silent-curves-reference.md"
     echo "  - To edit channels later:"
@@ -483,117 +483,6 @@ status-ai-mode:
     systemctl --user list-units --all --no-legend --no-pager 'local-ai.target' 'ramalama-*.service' || true
     echo
     nvidia-smi --query-gpu=index,name,memory.used,memory.free,memory.total --format=csv,noheader || true
-
-# ─── Windows / GPU-passthrough VM host setup (one-time) ───────────────
-# Prepares this host to run the Win11 trading VM (one RTX 4090 passed through
-# + Sunshine/Moonlight). NOT a "mode" — a one-shot installer of prerequisites:
-#   - adds you to the `libvirt` group so you can drive qemu:///system VMs
-#     (virt-manager, virsh) without sudo,
-#   - installs the Moonlight client (Flathub) — the host-side viewer for the
-#     Sunshine server you run inside Windows,
-#   - ensures the libvirt default NAT network is defined, active, autostarting,
-#   - DISCOVERS your user + uid, the chosen GPU's PCI id, and the local-AI
-#     service pinned to it, and writes them to
-#     /etc/bluefin-gdx/vm-passthrough.conf for the libvirt hook — so nothing
-#     machine-specific is baked into the image.
-# `gpu_index` selects which nvidia GPU to dedicate (default 1 = the second
-# 4090, matching win11-trading.xml @ 02:00.0). e.g. `ujust setup-vm-host 0`.
-# The libvirt/qemu/swtpm/OVMF stack and virt-manager itself are already in the
-# image. Re-login (or reboot) afterwards so the new group membership applies.
-# Idempotent — safe to re-run.
-setup-vm-host gpu_index="1":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    GPU_INDEX="{{gpu_index}}"
-
-    echo "==> Adding $USER to the 'libvirt' group (qemu:///system without sudo)..."
-    if id -nG "$USER" | tr ' ' '\n' | grep -qx libvirt; then
-        echo "    Already in 'libvirt' group."
-    else
-        sudo usermod -aG libvirt "$USER"
-        echo "    Added — log out/in (or reboot) before it takes effect."
-    fi
-
-    echo "==> Installing Moonlight (Flathub) — host-side stream client..."
-    if flatpak info com.moonlight_stream.Moonlight >/dev/null 2>&1; then
-        echo "    Moonlight already installed."
-    else
-        flatpak install -y flathub com.moonlight_stream.Moonlight
-    fi
-
-    echo "==> Ensuring the libvirt default NAT network is defined + active..."
-    sudo systemctl enable --now virtnetworkd.service
-    if ! sudo virsh net-info default >/dev/null 2>&1; then
-        echo "    Defining 'default' from /usr/share/libvirt/networks/default.xml..."
-        sudo virsh net-define /usr/share/libvirt/networks/default.xml
-    fi
-    sudo virsh net-autostart default >/dev/null 2>&1 || true
-    sudo virsh net-start default >/dev/null 2>&1 || echo "    (default network already active)"
-
-    echo "==> Generating the passthrough hook config (no hardcoded identity)..."
-    VM_USER="$USER"
-    VM_UID="$(id -u)"
-    # Bus id of the chosen GPU, in nvidia-smi's own form (e.g. 00000000:02:00.0).
-    GPU_BUSID="$(nvidia-smi --query-gpu=index,pci.bus_id --format=csv,noheader 2>/dev/null \
-        | awk -F', *' -v i="$GPU_INDEX" '$1==i {print $2}')"
-    if [ -z "$GPU_BUSID" ]; then
-        echo "    WARNING: could not read GPU index $GPU_INDEX from nvidia-smi —"
-        echo "    set GPU_BUSID by hand in the conf below."
-    fi
-    # The local-AI user service pinned to that GPU. The ramalama units set
-    # CUDA_DEVICE_ORDER=PCI_BUS_ID, so CUDA_VISIBLE_DEVICES == the nvidia index;
-    # find the unit that matches rather than assuming a name.
-    GPU_SERVICE=""
-    for u in $(systemctl --user list-unit-files 'ramalama-*.service' --no-legend 2>/dev/null | awk '{print $1}'); do
-        env_line="$(systemctl --user show -p Environment --value "$u" 2>/dev/null || true)"
-        if printf '%s\n' "$env_line" | grep -qE "(^| )CUDA_VISIBLE_DEVICES=${GPU_INDEX}( |\$)"; then
-            GPU_SERVICE="$u"; break
-        fi
-    done
-    if [ -z "$GPU_SERVICE" ]; then
-        GPU_SERVICE="ramalama-detector.service"
-        echo "    NOTE: no ramalama unit found pinned to GPU $GPU_INDEX; defaulting"
-        echo "    GPU_SERVICE=$GPU_SERVICE — verify it in the conf."
-    fi
-
-    conf=/etc/bluefin-gdx/vm-passthrough.conf
-    sudo install -d -m0755 /etc/bluefin-gdx
-    # printf, NOT a heredoc: just preserves the recipe's 4-space indent, so a
-    # heredoc EOF terminator wouldn't match (same reason as fix-spotify-decoration).
-    printf '%s\n' \
-      "# Generated by 'ujust setup-vm-host' — consumed by /etc/libvirt/hooks/qemu." \
-      "# Re-run setup-vm-host to regenerate, or edit by hand. No secrets here." \
-      "TARGET_VM=win11-trading" \
-      "VM_USER=$VM_USER" \
-      "VM_UID=$VM_UID" \
-      "GPU_BUSID=$GPU_BUSID" \
-      "GPU_SERVICE=$GPU_SERVICE" \
-      "AI_FLAG=$HOME/.config/local-ai/enabled" \
-      | sudo tee "$conf" >/dev/null
-    echo "    Wrote $conf"
-    echo "      VM_USER=$VM_USER  VM_UID=$VM_UID"
-    echo "      GPU_BUSID=$GPU_BUSID  GPU_SERVICE=$GPU_SERVICE"
-
-    echo
-    echo "Done. Next steps:"
-    echo "  1) Log out/in (group change), then open Virtual Machine Manager."
-    echo "  2) Create the disk and define the VM (template ships in the image):"
-    echo "       sudo qemu-img create -f qcow2 /var/lib/libvirt/images/win11-trading.qcow2 200G"
-    echo "       sudo virsh define /usr/share/bluefin-gdx/vm/win11-trading.xml"
-    echo "     Then edit the Windows ISO + virtio-win ISO paths in virt-manager."
-    echo "  3) Keep the VM named 'win11-trading' so the GPU-handoff hook fires:"
-    echo "     on start it frees $GPU_SERVICE (GPU $GPU_INDEX @ $GPU_BUSID);"
-    echo "     on shutdown it restores the model (only if AI mode is on)."
-    echo "  4) In Windows: install virtio-win drivers + qemu-guest-agent, the"
-    echo "     NVIDIA driver, a virtual-display driver, then Sunshine. Pair"
-    echo "     Moonlight to it from the host."
-    echo
-    nodedev="pci_$(printf '%s' "${GPU_BUSID#0000}" | tr ':.' '__')"
-    echo "  Before first VM start, confirm the GPU detaches cleanly:"
-    echo "     systemctl --user stop $GPU_SERVICE"
-    echo "     sudo virsh nodedev-detach $nodedev   # expect: detached"
-    echo "     sudo virsh nodedev-reattach $nodedev # restore to nvidia"
-    echo "     systemctl --user start $GPU_SERVICE"
 
 # ─── USB DAC (Schiit Multibit) reconnect ─────────────────────────────
 # Recover the DAC when it has no sink after a KVM switch or at boot. Three

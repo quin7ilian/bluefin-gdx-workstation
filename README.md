@@ -2,7 +2,7 @@
 
 [![bluebuild build badge](https://github.com/quin7ilian/bluefin-gdx-workstation/actions/workflows/build.yml/badge.svg)](https://github.com/quin7ilian/bluefin-gdx-workstation/actions/workflows/build.yml)
 
-A custom [Bluefin GDX](https://projectbluefin.io/) LTS image for HPO/ML workstation use.
+A custom [Bluefin LTS NVIDIA](https://github.com/projectbluefin/bluefin-lts) image for HPO/ML workstation use.
 
 ## Target hardware
 
@@ -25,7 +25,15 @@ The choices to keep in mind if you adapt this image for different hardware: `nvi
 
 ## What this image adds
 
-On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
+On top of `ghcr.io/projectbluefin/bluefin-lts-nvidia:stable`:
+
+The upstream base supplies the kernel-matched Nvidia driver, CUDA host driver
+libraries (`libcuda`), Nvidia Container Toolkit, and rootless Podman CDI. It
+does not bake the old GDX developer application set into the host. The native
+GPU-container path is rootless Podman with CDI. Use `ujust devmode` to select
+optional Homebrew/Flatpak developer tools; those installations persist
+independently of image updates. Its Docker option installs the Docker CLI and
+Compose through Homebrew, not a host `docker-ce` daemon.
 
 **Applications**
 - 1Password (GUI + CLI)
@@ -57,6 +65,7 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 - BMC virtual USB ethernet (`usb0`, USB ID `046b:ffb0`) marked unmanaged to suppress NM's auto-activation retry loop and the GNOME "network disconnected" notifications it produces. Re-enable with `nmcli device set usb0 managed yes` if you need it for BMC USB tunneling
 
 **Convenience**
+- `ujust devmode` — upstream Bluefin Developer Mode for optional Homebrew/Flatpak developer tools. Its Docker selection provides the Homebrew Docker CLI and Compose, not a host Docker daemon; rootless Podman + CDI is the image's native GPU-container path
 - `ujust setup-chromium` — installs the Chromium Flatpak and bridges it to the host 1Password app (native-messaging wrapper + Chromium manifest + `flatpak override`), and adds `flatpak-session-helper` to 1Password's allowlist. Idempotent; run once post-rebase
 - `ujust enable-insync` / `ujust disable-insync` / `ujust status-insync`
 - `ujust toggle-ai-mode` / `ujust status-ai-mode` — flip local AI models (phi-4 curator on `:8081`, Codestral 22B on `:8082`) between AI MODE (on, GPU-backed) and HPO MODE (off, both 4090s freed). Gated by `~/.config/local-ai/enabled`; survives reboot.
@@ -66,29 +75,29 @@ On top of `ghcr.io/ublue-os/bluefin-gdx:lts`:
 - `ujust disable-liqctld` — flips `liquidctl_integration = false` in `/etc/coolercontrol/config.toml`. Run standalone if `install-cc-plugin` was done before this feature landed
 
 **BMC fan control bridge**
-- `coolercontrol-bmc-bridge.service` switches FAN1-5 (CPU + rear + 3× CHA channels) to BMC manual mode before coolercontrold starts, and back to default mode when it stops. Companion to `coolercontrold.service`; **upstream service file is not modified**
+- `coolercontrol-bmc-bridge.service` switches FAN1-7 (CPU + rear + 3× CHA + chipset + VRM channels) to BMC manual mode before coolercontrold starts, and back to default mode when it stops. Companion to `coolercontrold.service`; **upstream service file is not modified**
 - `/usr/libexec/cc-set-fan-duty.sh` does the per-channel read-modify-write of the BMC's 16-byte duty register via `ipmitool raw 0x3a 0xd6/0xda`. Wrapper has a 5% floor for BMC validation (not thermal safety — that lives in the curves)
-- FAN6 (SB_FAN1, chipset) and FAN7 (MOS_FAN1, VRM) intentionally stay on BMC auto in iteration 1
+- FAN6 (SB_FAN1, chipset) and FAN7 (MOS_FAN1, VRM) use higher safety floors and aggressive ramp-up; see `silent-curves-reference.md`
 - liquidctl integration is disabled by default (no liquid cooling here, avoids the EPEL dep)
-- `ujust install-cc-plugin` deploys a pre-populated `config.json` with all 5 fan channels and 12 temp sensors already defined for the WRX80 BMC — no manual UI setup required. Curves are still configured via the UI per `silent-curves-reference.md`. Channel definitions can be edited at `/etc/coolercontrol/plugins/custom-device/config.json`; see `channels-reference.md` for the current mapping
+- `ujust install-cc-plugin` deploys a pre-populated `config.json` with all 7 fan channels and 12 temp sensors already defined for the WRX80 BMC — no manual UI setup required. Curves are still configured via the UI per `silent-curves-reference.md`. Channel definitions can be edited at `/etc/coolercontrol/plugins/custom-device/config.json`; see `channels-reference.md` for the current mapping
 
 ## Installation
 
-To rebase an existing atomic Fedora installation to the latest build:
+To switch an existing bootc system to the latest signed build:
 
 ```
-# First rebase to the unsigned image (to get signing keys and policies):
-sudo rpm-ostree rebase ostree-unverified-registry:ghcr.io/quin7ilian/bluefin-gdx-workstation:latest
-sudo systemctl reboot
-
-# Then rebase to the signed image:
-sudo rpm-ostree rebase ostree-image-signed:docker://ghcr.io/quin7ilian/bluefin-gdx-workstation:latest
+sudo bootc switch ghcr.io/quin7ilian/bluefin-gdx-workstation:latest --enforce-container-sigpolicy
 sudo systemctl reboot
 ```
 
 ## Post-install steps
 
 ```bash
+# Optional: select Homebrew/Flatpak developer tools from upstream Bluefin
+# Developer Mode. Its Docker option installs the Docker CLI and Compose, not
+# a host docker-ce daemon; use rootless Podman for the native container engine.
+ujust devmode
+
 # Enable the Insync sync engine for your user (persists across reboots)
 ujust enable-insync
 
@@ -104,7 +113,7 @@ insync show
 
 # Install the CoolerControl custom-device plugin (one-off, lives in /var
 # and persists across image updates). This also:
-#   - deploys a pre-populated config.json with all 5 fan channels and 12
+#   - deploys a pre-populated config.json with all 7 fan channels and 12
 #     temp sensors defined for the WRX80 BMC (skip-if-exists, so manual
 #     edits aren't clobbered)
 #   - disables the liquidctl integration (no liquid cooling on this build)
@@ -117,10 +126,57 @@ ujust install-cc-plugin
 #       /usr/share/cc-bmc-bridge/silent-curves-reference.md
 #
 # The BMC bridge service is enabled at build time and automatically
-# switches FAN1-5 to manual mode when CoolerControl starts.
+# switches FAN1-7 to manual mode when CoolerControl starts.
 ```
 
 ## Verification
+
+After switching to a new deployment, verify the compute-only split:
+
+```bash
+(
+set -euo pipefail
+
+# Must contain nvidia-drm.modeset=0.
+grep -o 'nvidia-drm.modeset=[^ ]*' /proc/cmdline
+grep -qw 'nvidia-drm.modeset=0' /proc/cmdline
+
+# Host driver and every installed Nvidia compute card should be visible.
+nvidia-smi
+
+# Refuse to let the DRM check pass vacuously when no Nvidia PCI device is
+# bound to the driver.
+shopt -s nullglob
+nvidia_gpus=(/sys/bus/pci/drivers/nvidia/????:??:??.?)
+(( ${#nvidia_gpus[@]} > 0 )) || {
+  echo "ERROR: no PCI devices are bound to the Nvidia driver" >&2
+  exit 1
+}
+
+# Neither graphics module may be loaded.
+if lsmod | grep -Eq '^(nvidia_drm|nvidia_modeset)[[:space:]]'; then
+  lsmod | grep -E '^(nvidia_drm|nvidia_modeset)[[:space:]]'
+  echo "ERROR: Nvidia graphics module is loaded" >&2
+  exit 1
+fi
+
+# Every Nvidia device should report "compute-only" rather than a DRM directory.
+for gpu in "${nvidia_gpus[@]}"; do
+  if [ -d "$gpu/drm" ]; then
+    echo "ERROR: DRM node present: $gpu/drm" >&2
+    exit 1
+  fi
+  echo "compute-only: $(basename "$gpu")"
+done
+
+# Rootless Podman CDI smoke test.
+podman run --rm \
+  --device nvidia.com/gpu=all \
+  --security-opt=label=disable \
+  nvcr.io/nvidia/cuda:12.4.1-base-ubuntu22.04 \
+  nvidia-smi
+)
+```
 
 Image signed with [Sigstore cosign](https://github.com/sigstore/cosign):
 
@@ -130,5 +186,5 @@ cosign verify --key cosign.pub ghcr.io/quin7ilian/bluefin-gdx-workstation
 
 ## Build
 
-Built and signed automatically via the GitHub Actions workflow in `.github/workflows/build.yml` (BlueBuild template). The daily rebuild picks up the latest upstream Bluefin GDX base on each run.
+Built and signed automatically via the GitHub Actions workflow in `.github/workflows/build.yml` (BlueBuild template). The daily rebuild picks up the latest upstream Bluefin LTS NVIDIA stable base on each run.
 Each rebuild also picks up the latest stable upstream Zed tarball.
