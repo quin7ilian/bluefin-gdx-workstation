@@ -1,0 +1,27 @@
+# Raise the systemd device-unit timeout from the 90s default to 300s.
+#
+# Why: on the first cold boot of a new deployment, ZFS's zfs-import-cache.service
+# (baked into the base image; there are NO zpools on this host) pulls in the
+# deprecated systemd-udev-settle.service, which blocks until udev has finished
+# cold-plugging EVERY device. On this large PCIe/USB topology — 2x compute GPU +
+# the AMD display GPU + multiple NVMe + the USB KVM/DAC enumeration storm — that
+# settle can take ~100s+ on a slow cold boot. Observed once at ~132s, which blew
+# the 90s DefaultDeviceTimeoutSec on the /boot and /boot/efi `.device` units ->
+# local-fs.target failed -> systemd-logind failed -> GDM never started. A warm
+# reboot (fast settle) recovered it. See the conversation on 2026-07-17.
+#
+# This karg only raises the CEILING. On a healthy boot the boot devices appear in
+# a few seconds and boot proceeds immediately; the larger timeout only matters
+# when a device is genuinely slow (it waits instead of failing) or truly absent
+# (it waits longer before dropping to the emergency shell). Zero cost otherwise.
+# 300s (vs the ~132s worst case observed) leaves comfortable cold-boot margin.
+#
+# NOTE: this treats the SYMPTOM — a boot can still be slow (~2-4 min to GDM) on a
+# bad cold boot, it just won't FAIL. The trigger is the unused ZFS import service
+# dragging in udev-settle; masking zfs-import-cache.service removes the ~100s wait
+# entirely and keeps cold boots fast. Left un-masked for now by choice.
+#
+# This is a NEW karg in its own kargs.d file (add-only, same pattern as
+# 15-amdgpu-edid.toml / 20-usb-dac-quirk.toml) — bootc aggregates kargs.d, so a
+# drop-in is correct here (not a base-file edit, since nothing is being overridden).
+kargs = ["systemd.default_device_timeout_sec=300"]
