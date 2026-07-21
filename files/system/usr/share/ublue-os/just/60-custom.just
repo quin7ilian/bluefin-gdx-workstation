@@ -426,65 +426,6 @@ disable-liqctld:
         exit 1
     fi
 
-# ─── Local AI models (Ramalama, gated) ───────────────────────────────
-# Two GPU-pinned llama.cpp servers via Ramalama (brew-installed, NOT baked
-# into the image), managed as systemd user services under local-ai.target
-# and gated by the flag file ~/.config/local-ai/enabled:
-#   - ramalama-detector  GPU1 :8081  phi-4 — the Claude Code curator model
-#                        (background memory/skill detection over its OpenAI API).
-#   - ramalama-coder     GPU0 :8082  Codestral 22B — Zed edit-prediction (FIM
-#                        autocomplete via /v1/completions, prompt_format codestral)
-#                        AND commit-message generation (/v1/chat/completions).
-#
-# Default is AI MODE: both models auto-start at login, auto-restart on crash,
-# and survive reboot. Before a heavy HPO run, `ujust toggle-ai-mode` flips to
-# HPO MODE — both models stop and STAY off (no auto-restart, no return on
-# reboot) until you toggle back, freeing Nvidia compute capacity. The flag is
-# the hard gate
-# (ConditionPathExists on every unit); local-ai.target groups them so one
-# toggle governs all present and future local GPU models. First start pulls the
-# models into ~/.local/share/ramalama (~9GB + ~13GB); later starts are instant.
-
-# Flip between AI MODE (local models on) and HPO MODE (off — Nvidia compute freed).
-toggle-ai-mode:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    flag="$HOME/.config/local-ai/enabled"
-    if [ -f "$flag" ]; then
-        # → HPO MODE. Remove the gate FIRST so a queued/boot start can't slip
-        # through it, then stop the target (PartOf propagates to the services).
-        rm -f "$flag"
-        systemctl --user stop local-ai.target
-        podman rm -f ramalama-detector ramalama-coder >/dev/null 2>&1 || true
-        echo "HPO MODE — local AI models stopped; Nvidia compute capacity freed."
-    else
-        # → AI MODE.
-        mkdir -p "$(dirname "$flag")"
-        touch "$flag"
-        # Idempotently enable so the wants symlinks exist (needed on a fresh
-        # image where nothing has enabled them yet): local-ai.target into
-        # default.target so AI mode survives reboot, and each service into
-        # local-ai.target. Then start the target.
-        systemctl --user enable local-ai.target ramalama-detector.service ramalama-coder.service >/dev/null 2>&1 || true
-        systemctl --user start local-ai.target
-        echo "AI MODE — local AI models starting (phi-4 :8081, Codestral :8082)."
-        echo "First start pulls the models; watch progress with: ujust status-ai-mode"
-    fi
-
-# Show the current mode (AI vs HPO), the unit states, and GPU usage.
-status-ai-mode:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -f "$HOME/.config/local-ai/enabled" ]; then
-        echo "Mode: AI MODE  (local models enabled)"
-    else
-        echo "Mode: HPO MODE (local models gated off)"
-    fi
-    echo
-    systemctl --user list-units --all --no-legend --no-pager 'local-ai.target' 'ramalama-*.service' || true
-    echo
-    nvidia-smi --query-gpu=index,name,memory.used,memory.free,memory.total --format=csv,noheader || true
-
 # ─── USB DAC (Schiit Multibit) reconnect ─────────────────────────────
 # Recover the DAC when it has no sink after a KVM switch or at boot. Three
 # failure modes, handled in escalating order:

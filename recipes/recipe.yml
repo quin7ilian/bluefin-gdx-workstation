@@ -15,10 +15,9 @@ image-version: stable
 modules:
   # ─── System config files ─────────────────────────────────────────────
   # zram-generator override (empty file), sysctl tunings, THP tmpfiles.d,
-  # systemd user units (insync, protonmail-bridge, local AI), ujust
-  # recipes, bootc kargs (including the RX 9070 XT FAMS2 workaround),
-  # GNOME gschema override (disable auto-suspend), tailscaled network-online
-  # drop-in.
+  # systemd user units (insync, protonmail-bridge), ujust recipes, bootc kargs
+  # (including the RX 9070 XT FAMS2 workaround), GNOME gschema override
+  # (disable auto-suspend), tailscaled network-online drop-in.
   - type: files
     files:
       - source: system

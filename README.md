@@ -68,7 +68,6 @@ Homebrew, not a host `docker-ce` daemon.
 - `ujust devmode` — upstream Bluefin Developer Mode for optional Homebrew/Flatpak developer tools. Its Docker selection provides the Homebrew Docker CLI and Compose, not a host Docker daemon; rootless Podman + CDI is the image's native GPU-container path
 - `ujust setup-chromium` — installs the Chromium Flatpak and bridges it to the host 1Password app (native-messaging wrapper + Chromium manifest + `flatpak override`), and adds `flatpak-session-helper` to 1Password's allowlist. Idempotent; run once post-rebase
 - `ujust enable-insync` / `ujust disable-insync` / `ujust status-insync`
-- `ujust toggle-ai-mode` / `ujust status-ai-mode` — flip local AI models (phi-4 curator on `:8081`, Codestral 22B on `:8082`) between AI MODE (on, GPU-backed) and HPO MODE (off, Nvidia compute capacity freed). Gated by `~/.config/local-ai/enabled`; survives reboot.
 - `ujust install-cc-plugin` — installs the CoolerControl custom-device plugin post-rebase (also silences the liquidctl warning)
 - `ujust upgrade-cc-plugin` — pulls the latest plugin binary from upstream and re-applies, preserving your customized `manifest.toml`
 - `ujust refresh-bmc-channels` — replaces `/etc/coolercontrol/plugins/custom-device/config.json` with the current image's template. Use after a rebase when you want to adopt a changed channel definition. Backs up the existing config first
