@@ -16,8 +16,9 @@ modules:
   # ─── System config files ─────────────────────────────────────────────
   # zram-generator override (empty file), sysctl tunings, THP tmpfiles.d,
   # systemd user units (insync, protonmail-bridge, local AI), ujust
-  # recipes, GNOME gschema override (disable auto-suspend), tailscaled
-  # network-online drop-in.
+  # recipes, bootc kargs (including the RX 9070 XT FAMS2 workaround),
+  # GNOME gschema override (disable auto-suspend), tailscaled network-online
+  # drop-in.
   - type: files
     files:
       - source: system
@@ -71,7 +72,7 @@ modules:
       - |
         set -euo pipefail
 
-        # This is the host-side CUDA contract the old GDX image supplied:
+        # This is the host-side CUDA contract required by this image:
         # the kernel driver, CUDA driver libraries, and container integration.
         # Workload libraries/toolchains (CUDA runtime, cuBLAS, cuDNN, nvcc,
         # etc.) belong in workload containers. Fail the build if the new base
@@ -154,7 +155,8 @@ modules:
         grep -qx 'install nvidia_modeset /usr/bin/true' <<<"$merged_modprobe"
 
         # (2) Strip ALL nvidia modules from the base's dracut force_drivers.
-        # The display is the AMD W7500, so nvidia is never needed in the ramdisk.
+        # The display is driven by the AMD RX 9070 XT, so nvidia is never needed
+        # in the ramdisk.
         # Removing it (a) keeps nvidia_drm/nvidia_modeset out so the desktop can't
         # grab the cards, and (b) shrinks the initramfs massively — the huge open
         # nvidia.ko + GSP firmware drop out. That size cut is essential: /boot is
@@ -368,21 +370,6 @@ modules:
   #   enable it, so without this the web UI on :11987 is not reachable
   #   after a fresh rebase. Must come AFTER the CoolerControl install
   #   module so the unit file exists when `systemctl enable` runs.
-  # - amdgpu-pin-mclk.service: REMOVED — superseded by the custom-EDID fix
-  #   (files/system/usr/lib/firmware/edid/g95sd-120.bin +
-  #   /usr/lib/bootc/kargs.d/15-amdgpu-edid.toml). Pinning MCLK stopped the
-  #   Navi 33 / 5120x1440 blanking, but only by forcing the GPU into `manual`
-  #   mode, which ALSO clamped the shader clock to ~810 MHz (half of boost) →
-  #   sluggish desktop. The EDID fixes it at the display-timing layer instead:
-  #   it runs the panel at 5120x1440@120 with a large (~1060us) vblank so the
-  #   mclk switch hides in it (independent of DSC — the vblank does the work,
-  #   DSC is left on for HDR/10-bit; 240 Hz is unfixable — ~44 Gbps exceeds the
-  #   W7500's UHBR10 output ceiling 38.8), so mclk runs on `auto` and gfxclk
-  #   boosts.
-  #   The unit + script (files/system/etc/systemd/system/,
-  #   /usr/libexec/pin-amdgpu-mclk.sh) were deleted — recoverable from git
-  #   history if the EDID ever needs to be rolled back.
-  #   (Root cause is NOT PSR — sink advertises PSR ver 0. See AGENTS.md #9.)
   # - coolercontrol-bmc-bridge.service: companion oneshot that switches
   #   FAN1-7 to BMC manual mode before coolercontrold starts, and back
   #   to default mode when it stops. Enables CoolerControl to drive the
@@ -601,11 +588,6 @@ modules:
           exit 1
         fi
         echo "Verified: no nvidia kernel modules in the regenerated initramfs"
-        grep -q 'usr/lib/firmware/edid/g95sd-120.bin' "$initrd_listing" || {
-          echo "ERROR: custom G95SD EDID missing from regenerated initramfs"
-          exit 1
-        }
-        echo "Verified: custom G95SD EDID is present in the regenerated initramfs"
         rm -f "$initrd_listing"
 
   # ─── Image signing (cosign) ──────────────────────────────────────────

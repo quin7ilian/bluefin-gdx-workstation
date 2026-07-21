@@ -13,15 +13,15 @@ Several pieces of this image are tuned to one specific build — kargs, sysctl v
 | Motherboard | ASRock WRX80 Creator R2.0 |
 | CPU | AMD Ryzen Threadripper PRO 5995WX (64-core / 128-thread) |
 | RAM | 512 GB DDR4 ECC |
-| Display GPU | AMD Radeon Pro W7500 (Navi 33) |
-| Compute GPUs | 2 × NVIDIA GeForce RTX 4090 |
-| Primary display | Samsung Odyssey G95SD (5120×1440 @ 240 Hz, DisplayPort) |
+| Display GPU | ASUS Radeon RX 9070 XT Prime OC 16 GB (Navi 48) |
+| Compute GPU | NVIDIA GeForce RTX 4090 |
+| Primary display | Samsung Odyssey G95SD (5120×1440 @ 240 Hz) |
 | 10G NIC | 2 × Aquantia AQC113CS (driver: `atlantic`) |
 | Wireless | Intel AX210 (Wi-Fi 6E + Bluetooth) |
 | BMC | ASPEED, exposes virtual USB ethernet (USB ID `046b:ffb0`) |
 | Storage | NVMe (Kingston KC3000 4 TB + 1 TB) |
 
-The choices to keep in mind if you adapt this image for different hardware: `nvidia-drm.modeset=0` assumes AMD-primary + Nvidia-compute-only display layout; the custom EDID (`drm.edid_firmware`) is hand-built for the Samsung G95SD's specific high-refresh blanking; `vm.dirty_bytes` and `vm.max_map_count` are tuned for 512 GB; the BMC USB ethernet suppression matches by interface name `usb0`.
+The choices to keep in mind if you adapt this image for different hardware: `nvidia-drm.modeset=0` assumes an AMD-primary + Nvidia-compute-only display layout; `amdgpu.dcdebugmask=0x20000` is an RX 9070 XT/DCN4 workaround validated against this G95SD at 240 Hz and intentionally trades idle GPU power for display stability; `vm.dirty_bytes` and `vm.max_map_count` are tuned for 512 GB; the BMC USB ethernet suppression matches by interface name `usb0`.
 
 ## What this image adds
 
@@ -29,18 +29,18 @@ On top of `ghcr.io/projectbluefin/bluefin-lts-nvidia:stable`:
 
 The upstream base supplies the kernel-matched Nvidia driver, CUDA host driver
 libraries (`libcuda`), Nvidia Container Toolkit, and rootless Podman CDI. It
-does not bake the old GDX developer application set into the host. The native
+keeps optional developer applications outside the host image. The native
 GPU-container path is rootless Podman with CDI. Use `ujust devmode` to select
-optional Homebrew/Flatpak developer tools; those installations persist
-independently of image updates. Its Docker option installs the Docker CLI and
-Compose through Homebrew, not a host `docker-ce` daemon.
+Homebrew/Flatpak developer tools; those installations persist independently of
+image updates. Its Docker option installs the Docker CLI and Compose through
+Homebrew, not a host `docker-ce` daemon.
 
 **Applications**
 - 1Password (GUI + CLI)
 - Insync (GUI + Nautilus extension), background-managed via a systemd user unit
 - Zed editor (official upstream tarball, installed to `/usr/lib/zed.app`)
 - `gnome-browser-connector` — native messaging host so extensions.gnome.org "Install" buttons work from the browser
-- Chromium — installed and wired to the host 1Password app via `ujust setup-chromium`. Deliberately a **Flatpak, not a host RPM**: CentOS Stream 10's mesa is built without the VA-API frontend (no `mesa-va-drivers` exists for EL10 in any repo), so a host-native Chromium would decode video in software. The Flatpak's freedesktop runtime bundles its own AMD VA driver, so hardware video decode on the W7500 is available with no host-mesa changes — verify at `chrome://gpu`. (Trivalent itself can't be layered here: its RPM requires glibc ≥ 2.42 and CS10 ships 2.39.)
+- Chromium — installed and wired to the host 1Password app via `ujust setup-chromium`. Deliberately a **Flatpak, not a host RPM**: CentOS Stream 10's mesa is built without the VA-API frontend (no `mesa-va-drivers` exists for EL10 in any repo), so a host-native Chromium would decode video in software. The Flatpak's freedesktop runtime bundles its own AMD VA driver, so hardware video decode on the RX 9070 XT is available with no host-mesa changes — verify at `chrome://gpu`. (Trivalent itself can't be layered here: its RPM requires glibc ≥ 2.42 and CS10 ships 2.39.)
 
 **Thermal / fan control**
 - `coolercontrold` from the upstream COPR — enabled at build time, web UI on `http://localhost:11987`
@@ -56,7 +56,7 @@ Compose through Homebrew, not a host `docker-ce` daemon.
 
 **Kernel and system tunings**
 - `nvidia-drm.modeset=0` — for multi-GPU configs where an AMD GPU drives all displays and Nvidia GPUs are compute-only (prevents Mutter from doing cross-GPU framebuffer copies)
-- **Custom EDID for the Samsung Odyssey G95SD** — `drm.edid_firmware=DP-1:edid/g95sd-120.bin`, shipped at `/usr/lib/firmware/edid/` and pulled into the initramfs by a dracut `install_items` drop-in so it applies at early KMS. Runs the panel at **5120×1440@120 Hz with an enlarged ~1060 µs vertical blank** (Vtotal 1650) to eliminate the intermittent cursor-triggered screen blanking on the Navi 33 (Radeon Pro W7500): the amdgpu memory-clock (UCLK) switch can't hide in the native ~459 µs vblank, and the enlarged one gives it room — so the GPU runs on `auto` at full clock with no blanking. DSC is left enabled, so HDR / 10-bit is available on demand via GNOME's HDR toggle (8 bpc otherwise); add `amdgpu.dcdebugmask=0x4` to force DSC off as a guaranteed-uncompressed fallback (at the cost of HDR). **240 Hz is not achievable on this card** — the bandwidth (~44 Gbps) exceeds the W7500's DP 2.1 UHBR10 output ceiling (38.8 Gbps) and the panel is DP 1.4, so 240 would force DSC into a vblank too short to hide the switch. Built from the monitor's own stock EDID (10-bit + HDR/colorimetry preserved), validated with `edid-decode`.
+- **RX 9070 XT / G95SD 240 Hz stability** — `amdgpu.dcdebugmask=0x20000` disables DCN4 Sub-Viewport and Firmware-Assisted Memory Clock Switching (FAMS2). On this card, FAMS2 memory-clock transitions could stall the display stream long enough for the G95SD to blank and re-lock even though the DP link remained healthy. The workaround was validated for a full day at native **5120×1440@240 over DP 1.4 with DSC**: the performance policy stays `auto`, SCLK remains dynamic, and MCLK stays at its highest state. DSC, HDR/10-bit, and VRR remain available; the cost is higher idle GPU power. This matches the failure class tracked in [drm/amd #4795](https://gitlab.freedesktop.org/drm/amd/-/work_items/4795) and [#4753](https://gitlab.freedesktop.org/drm/amd/-/work_items/4753).
 - zram disabled (workstation with 512GB RAM does not need it)
 - Custom sysctl: scheduler, dirty-page limits, mmap count, overcommit, perf paranoid
 - Transparent Huge Pages set to `madvise`
@@ -68,10 +68,10 @@ Compose through Homebrew, not a host `docker-ce` daemon.
 - `ujust devmode` — upstream Bluefin Developer Mode for optional Homebrew/Flatpak developer tools. Its Docker selection provides the Homebrew Docker CLI and Compose, not a host Docker daemon; rootless Podman + CDI is the image's native GPU-container path
 - `ujust setup-chromium` — installs the Chromium Flatpak and bridges it to the host 1Password app (native-messaging wrapper + Chromium manifest + `flatpak override`), and adds `flatpak-session-helper` to 1Password's allowlist. Idempotent; run once post-rebase
 - `ujust enable-insync` / `ujust disable-insync` / `ujust status-insync`
-- `ujust toggle-ai-mode` / `ujust status-ai-mode` — flip local AI models (phi-4 curator on `:8081`, Codestral 22B on `:8082`) between AI MODE (on, GPU-backed) and HPO MODE (off, both 4090s freed). Gated by `~/.config/local-ai/enabled`; survives reboot.
+- `ujust toggle-ai-mode` / `ujust status-ai-mode` — flip local AI models (phi-4 curator on `:8081`, Codestral 22B on `:8082`) between AI MODE (on, GPU-backed) and HPO MODE (off, Nvidia compute capacity freed). Gated by `~/.config/local-ai/enabled`; survives reboot.
 - `ujust install-cc-plugin` — installs the CoolerControl custom-device plugin post-rebase (also silences the liquidctl warning)
 - `ujust upgrade-cc-plugin` — pulls the latest plugin binary from upstream and re-applies, preserving your customized `manifest.toml`
-- `ujust refresh-bmc-channels` — replaces `/etc/coolercontrol/plugins/custom-device/config.json` with the current image's template. Use after a rebase when a new image adds channels (e.g. iteration 2 added FAN6/FAN7). Backs up the existing config first
+- `ujust refresh-bmc-channels` — replaces `/etc/coolercontrol/plugins/custom-device/config.json` with the current image's template. Use after a rebase when you want to adopt a changed channel definition. Backs up the existing config first
 - `ujust disable-liqctld` — flips `liquidctl_integration = false` in `/etc/coolercontrol/config.toml`. Run standalone if `install-cc-plugin` was done before this feature landed
 
 **BMC fan control bridge**
@@ -131,7 +131,7 @@ ujust install-cc-plugin
 
 ## Verification
 
-After switching to a new deployment, verify the compute-only split:
+After switching to a new deployment, verify the Nvidia compute-only split:
 
 ```bash
 (

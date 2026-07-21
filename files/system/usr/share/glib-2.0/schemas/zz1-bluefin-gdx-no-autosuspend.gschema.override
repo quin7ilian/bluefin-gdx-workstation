@@ -6,11 +6,9 @@
 # This box only supports s2idle (/sys/power/mem_sleep = [s2idle]; no
 # deep/S3), and AMD + s2idle resume is a notorious hang: on 2026-05-28
 # the machine suspended at 23:09 and never resumed (PM: suspend entry
-# with no matching resume), wedged until a forced reboot. amdgpu was
-# also throwing DisplayPort link-training errors (core_link_write_dpcd
-# DP_LANE_COUNT_SET failed) on the W7500 → G95SD ultrawide — the same
-# Navi 33 + ultrawide display pipeline that needs the custom EDID fix
-# (drm.edid_firmware — see /usr/lib/bootc/kargs.d/15-amdgpu-edid.toml).
+# with no matching resume), wedged until a forced reboot. The AMD-driven
+# DisplayPort stack also emitted link-training errors during that failed
+# resume, but automatic suspend is undesirable here regardless of GPU.
 #
 # This is a 512 GB HPO/ML workstation that runs long jobs and hosts
 # Tailscale / CoolerControl / the BMC fan bridge, and is left on

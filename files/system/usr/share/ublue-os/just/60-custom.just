@@ -116,7 +116,7 @@ unfix-spotify-decoration:
 # is CentOS Stream 10, whose mesa is built WITHOUT the gallium-VA frontend
 # (libgallium-*.so exports no __vaDriverInit*, and no EL10 repo — base, EPEL,
 # negativo17, RPM Fusion — ships an AMD mesa-va-drivers). So a host-native
-# Chromium would get NO hardware video decode on the W7500. The Flatpak's
+# Chromium would get NO hardware video decode on the RX 9070 XT. The Flatpak's
 # org.freedesktop.Platform.GL.default runtime bundles its OWN
 # radeonsi_drv_video.so, so Chromium decodes in hardware against the amdgpu
 # render node with zero host-mesa changes — the same reason the Flatpak
@@ -439,12 +439,13 @@ disable-liqctld:
 # Default is AI MODE: both models auto-start at login, auto-restart on crash,
 # and survive reboot. Before a heavy HPO run, `ujust toggle-ai-mode` flips to
 # HPO MODE — both models stop and STAY off (no auto-restart, no return on
-# reboot) until you toggle back, freeing both 4090s. The flag is the hard gate
+# reboot) until you toggle back, freeing Nvidia compute capacity. The flag is
+# the hard gate
 # (ConditionPathExists on every unit); local-ai.target groups them so one
 # toggle governs all present and future local GPU models. First start pulls the
 # models into ~/.local/share/ramalama (~9GB + ~13GB); later starts are instant.
 
-# Flip between AI MODE (local models on) and HPO MODE (off — both 4090s freed).
+# Flip between AI MODE (local models on) and HPO MODE (off — Nvidia compute freed).
 toggle-ai-mode:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -455,7 +456,7 @@ toggle-ai-mode:
         rm -f "$flag"
         systemctl --user stop local-ai.target
         podman rm -f ramalama-detector ramalama-coder >/dev/null 2>&1 || true
-        echo "HPO MODE — local AI models stopped; both 4090s freed for compute."
+        echo "HPO MODE — local AI models stopped; Nvidia compute capacity freed."
     else
         # → AI MODE.
         mkdir -p "$(dirname "$flag")"

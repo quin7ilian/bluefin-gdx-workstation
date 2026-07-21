@@ -1,0 +1,14 @@
+# Keep the Samsung Odyssey G95SD stable at native 5120x1440@240 on the
+# Radeon RX 9070 XT (Navi 48 / DCN 4.0.1).
+#
+# RDNA4's FAMS2-assisted memory-clock transitions intermittently stall the
+# display stream long enough for this panel to blank and re-lock, even though
+# the DP link remains trained and the kernel reports no reset or underflow.
+# DC_DISABLE_SUBVP_FAMS prevents that transition path. At this display
+# bandwidth the driver consequently keeps MCLK at its highest state while the
+# overall performance policy and SCLK remain automatic.
+#
+# Empirically stable at 5120x1440@240 over DP 1.4 with DSC. This bit does not
+# disable DSC, HDR/10-bit, or VRR. The tradeoff is higher idle GPU power from
+# the pinned memory clock. Remove this karg and reboot to disable the workaround.
+kargs = ["amdgpu.dcdebugmask=0x20000"]
